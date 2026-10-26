@@ -1,0 +1,45 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use FindBin qw($Bin);
+use Test::Most tests => 7;
+use Error qw(:try);
+
+use lib "$Bin/../lib";
+
+# use_ok('HTTP::VWF::Utils');
+use_ok('Params::Get');
+
+# Test cases
+# Hash reference input
+my $hash_input = { key1 => 'value1', key2 => 'value2' };
+is_deeply(Params::Get::get_params(undef, $hash_input), $hash_input, 'Direct hash reference input works');
+
+# Single argument with default
+is_deeply(Params::Get::get_params('key', 'value'), { key => 'value' }, 'Single argument with default works');
+
+# Multiple key-value pairs
+is_deeply(Params::Get::get_params(undef, key1 => 'value1', key2 => 'value2'), { key1 => 'value1', key2 => 'value2' }, 'Multiple key-value pairs work');
+
+# Invalid single argument without default
+my $msg;
+try {
+	Params::Get::get_params(undef, 'value');
+} catch Error with {
+	$msg = shift;
+};
+like($msg, qr/Usage/, 'Throws an error for single argument without default');
+
+# Zero arguments with default
+try {
+	Params::Get::get_params('key');
+} catch Error with {
+	$msg = shift;
+};
+like($msg, qr/Usage/, 'Throws an error for zero arguments with default');
+
+# Zero arguments without default
+my $params = Params::Get::get_params();
+is_deeply($params, undef, 'Zero arguments without default returns undef');

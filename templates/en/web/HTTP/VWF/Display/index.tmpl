@@ -1,0 +1,32 @@
+<html>
+	<head>
+		<title>VWF Test Page</title>
+		[% IF twitter %]
+			<meta name="twitter:site" content="@[% twitter %]">
+			[% IF SiteTitle.Default %]
+				<meta name="twitter:title" content="[% SiteTitle.Default.join(' ') %]">
+			[% END %]
+		[% END %]
+	</head>
+	<body>
+		[% IF error %]
+			<p><center><font color="red" size="+2">
+				[% error %]
+			</font></center></p>
+		[% END %]
+		[% IF action == 'sent' %]
+			Your e-mail was sent
+		[% END %]
+		<p>
+			Admin Login<br>
+			<form method="post" action="#">
+				<input name="action" value="login" type="hidden">
+				<label for="name">Name:</label>
+				<input name="name" id=name" type="text" value="[%- name %]">
+				<label for="password">Password:</label>
+				<input name="password" id="password" type="password">
+				<button type="submit" value="Submit">Login</button>
+			</form>
+		</p>
+	</body>
+</html>

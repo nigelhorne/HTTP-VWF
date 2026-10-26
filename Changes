@@ -1,0 +1,14 @@
+Revision history for HTTP-VWF
+
+0.01
+	First release.
+	VWF (Versatile Web Framework) repackaged as a CPAN distribution,
+	with its modules renamed from VWF:: to HTTP::VWF:: so that the
+	namespace matches the distribution name.
+	Sites that were each carrying their own renamed copy of VWF
+	(ged2site, pds, Geo::Coder::Free, syslogd and the bandsman.co.uk,
+	concert-bands.co.uk and nigelhorne.com websites) can now depend on
+	this distribution instead.
+	Nothing has been changed on the way in: the code is VWF's, with the
+	namespace and the template directory path (templates/.../VWF/Display
+	is now templates/.../HTTP/VWF/Display) changed and nothing else.

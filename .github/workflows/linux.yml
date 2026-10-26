@@ -1,0 +1,57 @@
+---
+name: Linux
+permissions:
+  contents: read
+on:
+  push:
+    branches:
+      - "*"
+    tags-ignore:
+      - "*"
+  pull_request:
+
+jobs:
+  perl:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        perl-version:
+          - "latest"
+
+    container:
+      image: perl:${{ matrix.perl-version }}
+
+    steps:
+      - uses: actions/checkout@v7
+      - name: perl -V
+        run: perl -V
+      - name: Update
+        run: |
+          apt update -q -y
+          apt upgrade -y
+          apt dist-upgrade -y
+          apt install libdbd-csv-perl -y
+      - name: Install Dependencies
+        run: |
+          cpanm -iqn File::Spec ExtUtils::MakeMaker XML::LibXML
+          cpanm -iqfn CGI::IDS Data::Throttler CGI::ACL
+          cpanm --skip-satisfied -qn Database::Abstraction Log::WarnDie CGI::Lingua FCGI::Buffer || cat /github/home/.cpanm/work/*/build.log
+          cpanm --skip-satisfied -qn String::Random Log::Dispatch::File Class::Simple Taint::Runtime
+          cpanm --skip-satisfied -qn LWP::UserAgent::Cached LWP::Simple::WithCache Data::Serializer CGI::Carp B::Lint FCGI Template::Plugin::EnvHash HTML::SocialMedia Error IPC::System::Simple
+          cpanm --skip-satisfied -qn Template::Plugin::JSON Log::Any::Adapter::Log4perl XML::Simple CHI DBD::CSV
+          cpanm --skip-satisfied -qn File::HomeDir Config::Abstraction Config::Auto Template::Filters Carp::Always Test::MockObject JSON::MaybeXS
+          cpanm --skip-satisfied -qn Crypt::URandom File::pfopen Timer::Simple File::Slurp
+          cpanm --skip-satisfied -qn Filesys::Df Sys::MemInfo Sys::Uptime System::Info Data::Validate::URI Params::Validate::Strict
+          cpanm --skip-satisfied -qn Test::Most Readonly IP::Country::Fast CGI::Info~1.14
+      - name: Run Tests
+        run: |
+          prove -l t/security_tests.t
+          root_dir=$(realpath $(pwd)) prove -l t/captcha_tests.t
+          prove -l t/blacklist.t t/display_tests.t t/display_throttle.t
+          cd cgi-bin && mkdir -p ../data && perl -c -MO=Lint ./page.fcgi '' && perl -c -Mwarnings::unused ./page.fcgi '' || cat /github/home/.cpanm/work/*/build.log
+          root_dir=$(realpath $(pwd)/..) perl page.fcgi page=index
+          root_dir=$(realpath $(pwd)/..) perl page.fcgi page=meta_data
+          root_dir=$(realpath $(pwd)/..) perl page.fcgi page=/etc/passwd
+          cd ../t && prove get_params && root_dir=$(realpath $(pwd)/..) prove get_template_path
+          cat /tmp/vwf.log
