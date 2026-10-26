@@ -1,4 +1,9 @@
 # Generated from Makefile.PL using makefilepl2cpanfile
+#
+# Filesys::Df and XML::LibXML are conditioned on the platform by hand: neither
+# can be installed on Windows (see Makefile.PL), cpanm reads this file in
+# preference to Makefile.PL, and the generator cannot express the condition.
+# Re-apply it if this file is regenerated.
 
 requires 'perl', '5.20.0';
 
@@ -30,7 +35,7 @@ requires 'File::HomeDir';
 requires 'File::Slurp';   # Display/table.pm
 requires 'File::Spec';
 requires 'File::pfopen';
-requires 'Filesys::Df';   # Display/meta_data.pm
+requires 'Filesys::Df' if $^O ne 'MSWin32';   # Display/meta_data.pm
 requires 'HTML::SocialMedia';
 requires 'HTTP::Date';   # page.fcgi, for the access log lines
 requires 'HTTP::Status';
@@ -59,7 +64,7 @@ requires 'Time::HiRes';
 requires 'Time::Piece';
 requires 'Timer::Simple';
 requires 'Try::Tiny';
-requires 'XML::LibXML';   # Allow.pm reads the DShield feed with it
+requires 'XML::LibXML' if $^O ne 'MSWin32';   # Allow.pm reads the DShield feed with it
 
 on 'configure' => sub {
 	requires 'ExtUtils::MakeMaker', '6.64';   # Minimum version for TEST_REQUIRES

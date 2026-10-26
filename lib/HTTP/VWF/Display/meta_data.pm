@@ -11,7 +11,6 @@ use warnings;
 
 use parent 'HTTP::VWF::Display';
 
-use Filesys::Df;
 use List::Util qw(max);
 use POSIX qw(strftime);
 use Readonly;
@@ -20,6 +19,15 @@ use Sys::Uptime;
 use Sys::MemInfo;
 use Time::Piece;
 use Time::Seconds;
+
+# Filesys::Df needs the statvfs/statfs interfaces, and its own Makefile.PL
+# refuses to build on Windows, so it is an optional prerequisite: load it at
+# run time, and leave the disk figure out when it is not installed.
+my $HAVE_FILESYS_DF = eval {
+	require Filesys::Df;
+	Filesys::Df->import();
+	1;
+};
 
 # The browser types counted in the breakdown chart.
 # Keep this in step with HTTP::VWF::Display::_types() and CGI::Info::browser_type().
@@ -84,8 +92,8 @@ sub get_server_metrics {
 	$metrics->{cpu_count} = $si->ncpu // 0;
 	$metrics->{cpu_type} = $si->cpu_type // '';
 
-	# Disk usage
-	if(my $df = df('/')) {
+	# Disk usage, if Filesys::Df is installed - see the top of this file
+	if($HAVE_FILESYS_DF && (my $df = df('/'))) {
 		# prefer 'per' if present
 		$metrics->{disk_used_pct} = $df->{per} // int(100 * ($df->{blocks} - $df->{bfree}) / $df->{blocks});
 	} else {

@@ -156,6 +156,9 @@ what runs.
     to have the explanations taken as the values, or to be refused outright as not
     being in a format that can be read.
 
+    `t/config-format.t` holds this: it writes each form in a temporary directory
+    and reads it back through each reader.
+
     The document's own FIXME - "Configuration files should be in .../conf, not
     .../lib/conf" - is honoured: a site's `conf/` sits at the top of it, beside
     `cgi-bin/`.
@@ -259,6 +262,31 @@ what runs.
 
     Because the page's class path is part of the template path,
     `.../VWF/Display/` becomes `.../HTTP/VWF/Display/`.
+
+## Optional Prerequisites
+
+Two of the modules the framework can use are recommended rather than required,
+because neither can be installed everywhere and a site works without them:
+
+- `Filesys::Df`
+
+    The disk usage figure on the meta-data page.  Its own `Makefile.PL` refuses
+    Windows - it prints "This module does not support Windows" and points at
+    `Filesys::DfPortable` - so this distribution does not declare it there at all.
+    Requiring it would make `cpanm --installdeps` fail and HTTP::VWF impossible to
+    install on Windows.  Without it the meta-data page leaves the figure out.
+
+- `XML::LibXML`
+
+    The parser [HTTP::VWF::Allow](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3AAllow) reads the DShield feed with.  It links against a
+    system `libxml2`, which Strawberry Perl does not ship, so it does not build on
+    Windows either.  Without it [HTTP::VWF::Allow](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3AAllow) says once that it is skipping
+    the feed and carries on; the checks after that point in the module still run,
+    as they do when the feed cannot be downloaded.
+
+Everything else in `Makefile.PL` is required on every platform.  Both of these
+are loaded when they are first needed rather than with `use`, so neither is
+needed to install this distribution, and the test suite passes without them.
 
 ## License
 

@@ -27,6 +27,7 @@ README.md
 SECURITY.md
 t/blacklist.t
 t/captcha_tests.t
+t/config-format.t
 t/display_tests.t
 t/display_throttle.t
 t/get_params

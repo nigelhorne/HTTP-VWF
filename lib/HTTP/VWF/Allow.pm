@@ -32,6 +32,10 @@ my %blacklist_agents = (
 
 my %status;
 
+# Set once XML::LibXML has been found to be missing, so the log says so once
+# rather than on every request.
+my $told_about_xml_libxml;
+
 my $STATUS_TTL = 300;	# 5 minutes; keeps memory bounded and lets throttle windows expire
 
 sub _set_status {
@@ -252,11 +256,28 @@ sub allow {
 		$logger->warn('Couldn\'t create the DShield cache');
 	}
 
-	unless(scalar(@ips)) {
-		require LWP::Simple::WithCache;
-		LWP::Simple::WithCache->import();
+	# XML::LibXML is optional: it links against a system libxml2, which Strawberry
+	# Perl does not ship, so it is not installed everywhere.  Without it the
+	# DShield feed is skipped - as it is when the feed cannot be downloaded -
+	# and the checks below it still run.
+	my $has_xml_libxml = eval {
 		require XML::LibXML;
 		XML::LibXML->import();
+		1;
+	};
+	unless($has_xml_libxml) {
+		unless($told_about_xml_libxml++) {
+			if($logger) {
+				$logger->warn('XML::LibXML is not installed, skipping the DShield feed');
+			} else {
+				warn "XML::LibXML is not installed, skipping the DShield feed\n";
+			}
+		}
+	}
+
+	if($has_xml_libxml && !scalar(@ips)) {
+		require LWP::Simple::WithCache;
+		LWP::Simple::WithCache->import();
 
 		if($logger) {
 			$logger->trace('Downloading DShield signatures');

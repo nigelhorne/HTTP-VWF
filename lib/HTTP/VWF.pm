@@ -169,6 +169,9 @@ and C<disc_cache:> with colons, and a file mixing the two separators is liable
 to have the explanations taken as the values, or to be refused outright as not
 being in a format that can be read.
 
+F<t/config-format.t> holds this: it writes each form in a temporary directory
+and reads it back through each reader.
+
 The document's own FIXME - "Configuration files should be in .../conf, not
 .../lib/conf" - is honoured: a site's F<conf/> sits at the top of it, beside
 F<cgi-bin/>.
@@ -282,6 +285,35 @@ Because the page's class path is part of the template path,
 F<.../VWF/Display/> becomes F<.../HTTP/VWF/Display/>.
 
 =back
+
+=head1 Optional prerequisites
+
+Two of the modules the framework can use are recommended rather than required,
+because neither can be installed everywhere and a site works without them:
+
+=over 4
+
+=item C<Filesys::Df>
+
+The disk usage figure on the meta-data page.  Its own F<Makefile.PL> refuses
+Windows - it prints "This module does not support Windows" and points at
+C<Filesys::DfPortable> - so this distribution does not declare it there at all.
+Requiring it would make C<cpanm --installdeps> fail and HTTP::VWF impossible to
+install on Windows.  Without it the meta-data page leaves the figure out.
+
+=item C<XML::LibXML>
+
+The parser L<HTTP::VWF::Allow> reads the DShield feed with.  It links against a
+system C<libxml2>, which Strawberry Perl does not ship, so it does not build on
+Windows either.  Without it L<HTTP::VWF::Allow> says once that it is skipping
+the feed and carries on; the checks after that point in the module still run,
+as they do when the feed cannot be downloaded.
+
+=back
+
+Everything else in F<Makefile.PL> is required on every platform.  Both of these
+are loaded when they are first needed rather than with C<use>, so neither is
+needed to install this distribution, and the test suite passes without them.
 
 =head1 LICENSE
 

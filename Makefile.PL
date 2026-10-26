@@ -55,7 +55,13 @@ WriteMakefile(
 		'File::pfopen' => 0,
 		'File::Slurp' => 0,		# Display/table.pm
 		'File::Spec' => 0,
-		'Filesys::Df' => 0,		# Display/meta_data.pm
+		# Filesys::Df refuses to configure for MSWin32 - its own Makefile.PL says
+		# "This module does not support Windows" and points at
+		# Filesys::DfPortable - so it cannot be a prerequisite there.  Declaring
+		# it would make `cpanm --installdeps` fail and stop HTTP::VWF from
+		# installing at all.  Display/meta_data.pm leaves the disk figure out
+		# when it is missing.
+		(($^O ne 'MSWin32') ? ('Filesys::Df' => 0) : ()),
 		'HTML::SocialMedia' => 0,
 		'HTTP::Date' => 0,		# page.fcgi, for the access log lines
 		'HTTP::Status' => 0,
@@ -84,11 +90,19 @@ WriteMakefile(
 		'Time::Piece' => 0,
 		'Timer::Simple' => 0,
 		'Try::Tiny' => 0,
-		'XML::LibXML' => 0,		# Allow.pm reads the DShield feed with it
+		# XML::LibXML links against a system libxml2, which Strawberry Perl does
+		# not ship, so it does not build on Windows either.  Allow.pm reads the
+		# DShield feed with it, and skips that feed without it.
+		(($^O ne 'MSWin32') ? ('XML::LibXML' => 0) : ()),
 	}, dist => $dist,
 	clean => { FILES => 'HTTP-VWF-*' },
 	META_MERGE => {
 		'meta-spec' => { version => 2 },
+		# On Windows the two modules are not required, because neither can be
+		# installed there - so say what they are for instead (see PREREQ_PM).
+		(($^O eq 'MSWin32')
+			? (prereqs => { runtime => { recommends => { 'Filesys::Df' => 0, 'XML::LibXML' => 0 } } })
+			: ()),
 		resources => {
 			repository => {
 				type => 'git',
