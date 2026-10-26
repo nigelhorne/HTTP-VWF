@@ -2,6 +2,7 @@ cgi-bin/page.fcgi
 Changes
 CLAUDE.md
 conf/example.com
+cpanfile
 data/index.db
 lib/HTTP/VWF.pm
 lib/HTTP/VWF/Allow.pm
@@ -31,6 +32,7 @@ t/display_throttle.t
 t/get_params
 t/get_template_path
 t/security_tests.t
+t/vwf-sync.t
 templates/default/robot/HTTP/VWF/Display/index.html
 templates/default/web/HTTP/VWF/Display/captcha.tmpl
 templates/default/web/HTTP/VWF/Display/index.tmpl

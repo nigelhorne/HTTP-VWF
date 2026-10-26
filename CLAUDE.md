@@ -43,10 +43,13 @@ perl t/blacklist.t
 
 # These two have no .t suffix, so prove t/ skips them; CI runs them by name
 cd t && prove get_params && root_dir=$(realpath ..) prove get_template_path
+
+# Author-only: diff these modules against the VWF checkout (see below)
+AUTHOR_TESTING=1 prove -l t/vwf-sync.t
 ```
 
-Dependencies for the suite: `Test::Most` and `Test::MockObject` are declared in
-`Makefile.PL`; `IP::Country::Fast` and `CGI::ACL` are needed for the GeoIP
+Dependencies for the suite: `Test::Most`, `Test::MockObject` and
+`Test::DescribeMe` are declared in `Makefile.PL`; `IP::Country::Fast` and `CGI::ACL` are needed for the GeoIP
 parts of `t/blacklist.t`, which skip themselves if they are absent.
 
 Tests must not depend on files outside the repository.  `HTTP::VWF::Display`
@@ -225,7 +228,30 @@ sub new {
 
 Because this distribution is a rename of VWF, a fix belongs in both.  When you
 change a module here, check whether `../vwf` has the same file and whether the
-change applies there too; the reverse holds as well.  Sites that still carry
-their own renamed copy compare it against VWF with an author test along the
-lines of `Geo::Coder::Free`'s `t/vwf-sync.t`, so a module that drifts is
-reported rather than discovered later.
+change applies there too; the reverse holds as well.
+
+`t/vwf-sync.t` is an author test that checks this for you.  It diffs each of
+the 14 modules here against its counterpart in the VWF checkout, with the
+namespace neutralised on both sides, and fails for any line this distribution
+has that VWF does not - whether that is a fix made here and not given upstream,
+or an older revision of a line VWF has since changed.  Lines VWF has and we do
+not are reported as a diagnostic rather than a failure, since that is a re-sync
+waiting to happen.  POD, blank lines and `$VERSION` are ignored, which is what
+lets the two differ by their version numbers and their documentation.
+
+It skips unless `AUTHOR_TESTING` is set, and skips again if no VWF checkout is
+found through `$VWF_HOME` or `../vwf`, so it does not run in CI and a CPAN
+install is unaffected:
+
+```bash
+AUTHOR_TESTING=1 prove -l t/vwf-sync.t
+VWF_HOME=~/src/njh/vwf AUTHOR_TESTING=1 prove -l t/vwf-sync.t
+```
+
+It also checks the table of tracked modules against both trees, so a module
+added to one side and not the other is reported rather than silently skipped.
+`lib/HTTP/VWF.pm` is deliberately outside the comparison: it is this
+distribution's own front door and VWF has no `VWF.pm` to compare it against.
+
+Sites that still carry their own renamed copy use the same kind of test - see
+`Geo::Coder::Free`'s `t/vwf-sync.t`.

@@ -66,6 +66,7 @@ on 'configure' => sub {
 };
 
 on 'test' => sub {
+	requires 'Test::DescribeMe';   # t/vwf-sync.t is an author test
 	requires 'Test::MockObject';
 	requires 'Test::Most';
 };
