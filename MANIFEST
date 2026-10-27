@@ -1,6 +1,5 @@
 cgi-bin/page.fcgi
 Changes
-CLAUDE.md
 conf/example.com
 cpanfile
 data/index.db

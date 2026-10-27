@@ -1,3 +1,4 @@
+
 #!start included /usr/local/perls/perl-5.18.1/lib/5.18.1/ExtUtils/MANIFEST.SKIP
 # Avoid version control files.
 \bRCS\b
@@ -42,7 +43,7 @@
 \.tmp$
 \.#
 \.rej$
-\.yml$
+schemas\.yml$
 \.swp$
 
 # Avoid OS-specific files/dirs
@@ -56,29 +57,29 @@
 \bcover_html\b
 \bcoverage_history\b
 \bcovered\b
+nytprof.out
 
 # Avoid MYMETA files
 ^MYMETA\.
 #!end included /usr/local/perls/perl-5.18.1/lib/5.18.1/ExtUtils/MANIFEST.SKIP
 
 \.travis\.yml
+\.appveyor\.yml
+\.releaserc
 \.lwpcookies
-HTTP-VWF-.*
-\.test-script-*
+HTTP-.*
+.test-script-*
 typescript
+mutation.json
+^xt/mutant_\d
+CLAUDE.md
+\.claude
+\.circleci
 
 # Super-linter per-repo tuning files - not for distribution
 ^\.perlcriticrc$
 ^\.jscpd\.json$
 ^\.markdown-lint\.yml$
+# Super-linter tuning files - not for distribution
 ^\.prettierignore$
 ^\.textlintrc$
-
-# A site's own runtime state, not part of the distribution
-^save_to/
-^rate_limit/
-^log/
-^tmp/
-
-# Patch proposals for VWF, for review rather than for distribution
-^proposals/

@@ -177,6 +177,23 @@ argument - a string from a config file reaches it as that argument and breaks th
 ACL.  Anything else added at the top level of the config faces the same hazard:
 check that no class in the path declares a constructor parameter of that name.
 
+The site's own `conf/`, beside `cgi-bin/`, is searched before `~/lib/conf`, so a
+site can move one file at a time: one that still keeps its configuration in
+`~/lib/conf` is read from there, and one that has moved is read from its own
+`conf/`, where a leftover `~/lib/conf` copy no longer overrides it.
+`t/config-format.t` covers both.  That precedence is this module's: VWF's own
+`VWF::Config` - which the live sites load from `~/lib/perl5` - merges the
+directories the other way round, so there a leftover `~/lib/conf` file still
+wins, which is why a migrated site's old copy should be removed rather than left
+behind.  `~/concert-bands.co.uk` and `~/bandsman.co.uk` have been migrated: their
+`<domain>` and `<domain>:443` files are in the site's `conf/` and no longer in
+`~/lib/conf`.  `bandsman.co.uk:80` stays in `~/lib/conf`, the site having no copy
+under that name, and the other sites still keep theirs in `~/lib/conf`.  When
+neither location has a domain config, `Config::Abstraction` falls back to
+`local.yaml` there instead of failing, so a missing file is not reported -
+inspect `config_path` when a site looks wrong rather than assuming the domain
+file was read.
+
 The CSRF token requires a secret to be set in config:
 
 ```xml
@@ -304,6 +321,15 @@ for VWF are kept - each one carries the diff to apply, and the way to check it i
 to apply it to a clone and run the sync test against that clone with `VWF_HOME`.
 Applying all of them to a clone of `../vwf` makes the sync test pass outright.
 `proposals/` is excluded from the distribution by `MANIFEST.SKIP`.
+
+`cgi-bin/page.fcgi` diverges too, and the sync test does not track it, because
+the two scripts differ by namespace throughout and so cannot be compared
+verbatim.  The port's copy reads a site's own settings - its database directory,
+data modules, languages and allowed addresses - from the domain's configuration
+file, with the values VWF's script still hardcodes as the defaults;
+`proposals/vwf-site-settings.md` carries that change for VWF's copy.  Until it
+lands there the scripts are kept in step by hand, and `t/site-config.t` pins the
+defaults in this copy.
 
 Sites that still carry their own renamed copy use the same kind of test - see
 `Geo::Coder::Free`'s `t/vwf-sync.t`.
