@@ -114,6 +114,7 @@ my @TRACKED = (
 	'Display/meta_data.pm',
 	'Display/table.pm',
 	'Display/upload.pm',
+	'Throttle.pm',
 	'Utils.pm',
 );
 

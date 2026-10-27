@@ -4,12 +4,10 @@
 #
 # VWF's README describes a configuration file written as plain "key value"
 # lines, and its worked example is XML; F<conf/example.com> in this distribution
-# is XML.  Both forms are read by Config::Abstraction, which is how the framework
-# reads its configuration, and by Config::Auto, which is the reader VWF's own
-# HTTP::VWF::Display::table used before it was pointed at the site's F<conf/> -
-# so a site whose configuration was written the old way does not have to be
-# converted.  This test holds that: it writes each form and reads it back
-# through each reader.
+# is XML.  Config::Abstraction reads both, and it is now the only reader the
+# framework uses, so a site whose configuration was written the old way does not
+# have to be converted.  This test holds that: it writes each form and reads it
+# back.
 #
 # It also holds where a table looks for its configuration: the site's own
 # F<conf/>, beside F<cgi-bin/>, and then the F<lib/conf> directories that were
@@ -32,7 +30,7 @@ use Test::Most;
 use lib File::Spec->catfile($Bin, '..', 'lib');
 
 use Config::Abstraction;
-use Config::Auto;
+use HTTP::VWF::Config;
 use HTTP::VWF::Display::table;
 
 {
@@ -120,17 +118,6 @@ sub abstraction_config {
 	return $config;
 }
 
-# The reader VWF's Display::table used before it was pointed at the site's
-# conf/, and the one a site's own code may still be using.
-sub auto_config {
-	my ($dir) = @_;
-
-	my $config;
-	eval { $config = Config::Auto::parse($DOMAIN, path => $dir); };
-
-	return $config;
-}
-
 subtest 'the plain form, read by Config::Abstraction' => sub {
 	my ($dir, $file) = write_config($PLAIN);
 	my $config = abstraction_config($dir);
@@ -156,44 +143,6 @@ subtest 'the XML form, read by Config::Abstraction' => sub {
 	is_deeply($config->{disc_cache}, { driver => 'Null' }, 'and so does the other cache');
 	ok(scalar(grep { $_ eq $file } @{$config->{config_path} // []}),
 		'it was read from the file written here');
-};
-
-subtest 'the plain form, read by Config::Auto' => sub {
-	my ($dir) = write_config($PLAIN);
-	my $config = auto_config($dir);
-
-	is(ref($config), 'HASH', 'it was read at all');
-	is($config->{root_dir}, $PLAIN_ROOT_DIR, 'root_dir is read');
-	is($config->{memory_cache}, '/var/cache/example.com/memory', 'memory_cache is read');
-	is($config->{disc_cache}, '/var/cache/example.com/disc', 'disc_cache is read');
-};
-
-subtest 'the XML form, read by Config::Auto' => sub {
-	my ($dir) = write_config($XML);
-	my $config = auto_config($dir);
-
-	is(ref($config), 'HASH', 'it was read at all');
-	is($config->{root_dir}, $XML_ROOT_DIR, 'root_dir is read');
-	is_deeply($config->{memory_cache}, { driver => 'Null' }, 'nested settings keep their shape');
-	is_deeply($config->{disc_cache}, { driver => 'Null' }, 'and so does the other cache');
-};
-
-# The point of the compatibility: whichever reader a part of the framework uses,
-# the site sees the same settings.
-subtest 'the two readers agree' => sub {
-	foreach my $form (['plain', $PLAIN], ['XML', $XML]) {
-		my ($name, $content) = @{$form};
-
-		my ($dir) = write_config($content);
-		my $abstraction = abstraction_config($dir);
-		my $auto = auto_config($dir);
-
-		# config_path is Config::Abstraction recording where it read from, not a
-		# setting, so only the settings themselves are compared.
-		foreach my $key (qw(root_dir memory_cache disc_cache)) {
-			is_deeply($abstraction->{$key}, $auto->{$key}, "$name: both readers see $key the same");
-		}
-	}
 };
 
 # Lay out a site the way one is installed: a cgi-bin directory for the page
@@ -286,20 +235,89 @@ subtest "the site's conf/ is read before HOME/lib/conf" => sub {
 		"the site's own conf/ was the one used");
 };
 
+# Read through HTTP::VWF::Config itself, with the site's directory given and the
+# domain supplied the way a Host header supplies it.
+sub vwf_config {
+	my ($dir, $host) = @_;
+
+	# The environment overrides every setting the configuration file holds, so
+	# an inherited root_dir would be read instead of the file's.
+	local $ENV{'CONFIG_DIR'} = $dir;
+	delete local $ENV{'CONFIG_FILE'};
+	delete local $ENV{'root_dir'};
+
+	my $info = MockInfo->new(domain_name => $host, script_dir => $dir);
+	my $config = eval { HTTP::VWF::Config->new(info => $info) };
+
+	return $config;
+}
+
+subtest 'a Host header with a port reads the domain file' => sub {
+	my ($dir) = write_config($XML);	# Kept as F<example.com>, with no port on it
+
+	my $config = vwf_config($dir, "$DOMAIN:443");
+	is(ref($config), 'HTTP::VWF::Config', 'the configuration was read at all');
+	is($config->{root_dir}, $XML_ROOT_DIR, "the bare domain's file was used");
+};
+
+subtest 'a file named after the port wins when there is one' => sub {
+	SKIP: {
+		# A port-specific file name holds a colon, which Windows does not allow
+		skip 'a colon cannot appear in a file name on Windows', 3 if($^O eq 'MSWin32');
+
+		my ($dir) = write_config($XML);	# The bare domain
+		my $port_file = File::Spec->catfile($dir, "$DOMAIN:443");
+		open(my $out, '>', $port_file) or die "$port_file: $!";
+		print $out "<?xml version=\"1.0\"?>\n<config>\n\t<root_dir>/srv/port.example.com</root_dir>\n</config>\n";
+		close($out) or die "$port_file: $!";
+
+		my $port = vwf_config($dir, "$DOMAIN:443");
+		is(ref($port), 'HTTP::VWF::Config', 'the configuration was read at all');
+		is($port->{root_dir}, '/srv/port.example.com', 'the port-specific file was used');
+
+		my $plain = vwf_config($dir, $DOMAIN);
+		is($plain->{root_dir}, $XML_ROOT_DIR, 'and the bare domain still reads its own file');
+	}
+};
+
+subtest 'a host with no configuration file at all gets the defaults' => sub {
+	# A vhost whose file has not been written yet, the command line test in the
+	# POD, or CI, where the hostname is a container id: there is nothing to read.
+	# Config::Abstraction returns no object at all there, which is not a
+	# configuration error - dying over it would take the site down for a file
+	# that only describes it - so an empty configuration is built instead.
+	my $dir = tempdir(CLEANUP => 1);	# Empty: no file of any name to read
+
+	# HOME/lib/conf is searched too, so it must not be the machine's own: the
+	# configuration has to be empty for the right reason, not because the test
+	# happened to be run on a machine where the domain has no file either way.
+	local $ENV{'HOME'} = tempdir(CLEANUP => 1);
+
+	my $empty = vwf_config($dir, $DOMAIN);
+	is(ref($empty), 'HTTP::VWF::Config', 'a configuration is still built');
+
+	# The values the caller passes are applied on top of the defaults, so a
+	# caller that supplies its own settings still gets them.
+	local $ENV{'CONFIG_DIR'} = $dir;
+	delete local $ENV{'CONFIG_FILE'};
+	delete local $ENV{'root_dir'};
+	my $info = MockInfo->new(domain_name => $DOMAIN, script_dir => $dir);
+	my $overridden = eval {
+		HTTP::VWF::Config->new(info => $info, config => { root_dir => '/srv/none.example.com' })
+	};
+	is($overridden->{'root_dir'}, '/srv/none.example.com', 'and the values passed in are used');
+};
+
 subtest "the README's snippet, which mixes the two separators" => sub {
 	# It writes root_dir with a space and both caches with colons, so it is a
-	# description rather than a file to copy: neither reader takes it as the
-	# plain form.  If either ever starts to, the note warning about it in
-	# lib/HTTP/VWF.pm needs revisiting.
+	# description rather than a file to copy: it is not taken as the plain form.
+	# If that ever changes, the note warning about it in lib/HTTP/VWF.pm needs
+	# revisiting.
 	my ($dir) = write_config($MIXED);
 
 	my $abstraction = abstraction_config($dir);
 	ok(!(ref($abstraction) eq 'HASH' && defined $abstraction->{root_dir}),
 		'Config::Abstraction does not read root_dir from it');
-
-	my $auto = auto_config($dir);
-	ok(!(ref($auto) eq 'HASH' && defined $auto->{root_dir}),
-		'Config::Auto does not read root_dir from it');
 };
 
 done_testing();

@@ -160,9 +160,9 @@ F<conf/example.com> in this distribution is that file, and C<root_dir> is the
 directory holding the site's F<templates/>, as described.
 
 Both the plain form the document shows and the XML form the example uses are
-read - C<Config::Abstraction> takes either, and so does C<Config::Auto>, which a
-site's own code may still be reading its configuration with.  A site whose
-configuration is already written the old way does not have to be converted.
+read - C<Config::Abstraction> takes either, and it is the only reader the
+framework uses.  A site whose configuration is already written the old way does
+not have to be converted.
 Note that the snippet in the document is a description rather than a file to
 copy: it writes C<root_dir /path> with a space but C<memory_cache:> and
 C<disc_cache:> with colons, and a file mixing the two separators is liable to
@@ -170,7 +170,7 @@ have the explanations taken as the values, or to be refused outright as not
 being in a format that can be read.
 
 F<t/config-format.t> holds this: it writes each form in a temporary directory
-and reads it back through each reader.
+and reads it back.
 
 The document's own FIXME - "Configuration files should be in .../conf, not
 .../lib/conf" - is honoured: a site's F<conf/> sits at the top of the search
@@ -291,6 +291,104 @@ F<.../VWF/Display/> becomes F<.../HTTP/VWF/Display/>.
 
 =back
 
+=head1 Migrating a site from VWF
+
+A site that used VWF before this distribution existed carries its own copy of
+the modules on its C<@INC>, and a F<cgi-bin/page.fcgi> it has edited ever since.
+Moving it over is a change of module names, of where the configuration lives,
+and of which files the site still needs.  The steps can be taken one at a time,
+each checked before the next is started.
+
+=over 4
+
+=item 1. Install this distribution, and stop carrying VWF
+
+Remove the site's own copy of VWF from its C<@INC> - usually a F<lib/VWF/>
+directory among its modules - and install this distribution in its place:
+
+	cpanm HTTP::VWF
+
+Modules the site owns keep their names: a C<BBPortal::Display::news> is not
+VWF's, and does not move.
+
+=item 2. Rename the framework's namespace in the site's code
+
+Every C<VWF::> the site mentions becomes C<HTTP::VWF::>.  That is the C<use>
+lines in its page script (C<VWF::Allow>, C<VWF::Config>, C<VWF::Utils>,
+C<VWF::Data::vwf_log>, C<VWF::CAPTCHA>, C<VWF::Display::captcha> and the rest),
+the C<use parent> of each of its own page classes, and any class name built as a
+string - C<"VWF::Display::$page"> here is C<"HTTP::VWF::Display::$page">.
+
+=item 3. Move the framework's templates down one level
+
+The template path follows the class name, so F<templates/en/web/VWF/Display/>
+becomes F<templates/en/web/HTTP/VWF/Display/>.  The site's own page classes are
+unaffected: F<.../BBPortal/Display/> stays where it is.
+
+=item 4. Put the configuration in the site's own F<conf/>
+
+Move F<~/lib/conf/E<lt>domainE<gt>> - and anything under F</usr/lib/conf/>, the
+location VWF's own README names - to F<conf/E<lt>domainE<gt>> beside
+F<cgi-bin/>.  The file itself needs no editing: the plain C<key value> form the
+README shows and the XML form its example uses are both read from either
+location, by C<Config::Abstraction>.  F<conf/example.com> in this distribution
+is an example to copy.
+
+The site's F<conf/> is searched first, so a setting in it cannot be overridden
+by an old copy left in F<~/lib/conf>.  Delete that copy anyway: VWF's own
+C<VWF::Config> merges those directories the other way round, and where it is
+still running a leftover file there wins.
+
+Do not bring per-port copies across.  A request whose C<Host> header carries a
+port, F<example.com:443>, is looked up under that name and then under
+F<example.com> beneath it, so one file serves every port the site is reached on.
+
+=item 5. Decide whether the site keeps its own page script
+
+=over 4
+
+=item * A site whose pages are all the framework's can take this distribution's
+F<cgi-bin/page.fcgi> as it stands.  Its databases, data modules, languages and
+addresses then come from the configuration file - see L</Site settings> - and it
+need not be edited to keep the behaviour it had, since each default is the value
+the old script carried.
+
+=item * A site with pages of its own keeps its script, because that is what
+loads them: C<BBPortal::Display::$page> is not something the shipped script
+knows about.  Rename the namespaces as in step 2 and leave the rest as it is.
+The settings in L</Site settings> reach a site only when its script asks for
+them; the C<config_list()> helper that reads them lives in F<page.fcgi> rather
+than in a module, so copy it, or read the configuration hash directly, if the
+site wants them.
+
+=back
+
+=item 6. Check the prerequisites, and anything the site had of its own
+
+Two modules are optional here although a VWF site may have installed them:
+F<Filesys::Df> and F<XML::LibXML>, neither of which builds everywhere - see
+L</Optional prerequisites>.  An existing throttle store carries over unchanged:
+it is the same YAML file, named by C<throttle-E<gt>{file}>, with C<max_items>
+and C<interval> as they were.  So does an access log named by C<vwflog>.
+
+=item 7. Run the site before it is deployed
+
+From the site's own F<cgi-bin>, the line the script's header gives:
+
+	LANG=en_GB root_dir=$(pwd)/.. ./page.fcgi page=index
+
+The web server's configuration does not change, unless the site named its script
+F<index.fcgi> where this distribution names it F<page.fcgi>.
+
+=item 8. Keep the two in step
+
+A change made to one of the copied modules belongs in VWF as well.
+F<t/vwf-sync.t> fails for anything here that VWF has not got, which is what
+keeps the next site's migration a rename rather than a port - see
+L</Keeping in step with VWF>.
+
+=back
+
 =head1 Site settings
 
 A site describes itself in the configuration file named after its domain, in
@@ -343,6 +441,16 @@ it as a string where a hash is expected - breaking access control outright.
 
 Addresses exempt from rate limiting.  Default: C<127.0.0.1> and C<192.168.1.1> -
 loopback, and one private address.
+
+=item C<throttle>
+
+C<file> names the throttle store, C<max_items> is how many requests one address
+may make in C<interval> seconds, and both default to the values the framework
+has always used: a file called F<throttle> in the site's temporary directory,
+and 30 requests per 90 seconds.  A store that cannot be used is reported at
+error level and the request is served, rather than every visitor being refused
+for a fault of the server - see L<HTTP::VWF::Throttle>, in particular "WHEN THE
+STORE CANNOT BE USED".
 
 =item C<pages>
 

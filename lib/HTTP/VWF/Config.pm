@@ -83,6 +83,15 @@ An entry earlier in that list overrides every entry after it, so a setting in
 the site's own F<conf/>, beside F<cgi-bin/>, is not overridden by a leftover copy
 in one of the F<lib/conf> directories that predate it.
 
+A F<Host> header that carries a port makes the domain name F<example.com:443>,
+and the file for the bare domain is read underneath the port-specific one, so a
+site does not need a copy of its configuration for each port it is reached on.
+
+A host with no configuration file at all - a vhost whose file has not been
+written yet, or a command line test - is not an error: the defaults are used,
+and the file can be added later.  A file that is there and cannot be read is
+still an error.
+
 B<Returns:> Blessed HTTP::VWF::Config object
 
 B<Throws:> Error::Simple on configuration errors
@@ -215,9 +224,6 @@ sub new
 	}
 
 	if($params->{'debug'}) {
-		# Not sure this really does anything
-		# $Config::Auto::Debug = 1;
-
 		if($params->{logger}) {
 			while(my ($key,$value) = each %ENV) {
 				if($value) {
@@ -227,17 +233,29 @@ sub new
 		}
 	}
 
+	# Config::Abstraction returns nothing, rather than an object, when there is
+	# no file to read at all: a vhost that has not been given a config file yet,
+	# the command line test in the POD, or CI, where the hostname is a container
+	# id.  That is not a configuration error - the framework carries on with its
+	# defaults, and with the values in $params->{config} on top of them - so only
+	# a failure to read a file that is there is thrown.
 	my $config;
 	eval {
-		$config = Config::Abstraction->new(
+		my $config_abstraction = Config::Abstraction->new(
 			config_dirs => \@config_dirs,
-			config_files => ['default', $info->domain_name(), $ENV{'CONFIG_FILE'}, $params->{'config_file'}],
+			config_files => [$class->config_file_names(
+				domain => $info->domain_name(),
+				extra => [$ENV{'CONFIG_FILE'}, $params->{'config_file'}],
+			)],
 			logger => $params->{'logger'}
-		)->all();
+		);
+		$config = $config_abstraction ? $config_abstraction->all() : {};
+		1;
 	};
-	if($@ || !defined($config)) {
+	if($@) {
 		throw Error::Simple("Configuration error: $@");
 	}
+	$config ||= {};
 
 	# Validate essential configuration structure
 	throw Error::Simple('Configuration must be a hash reference') unless(ref($config) eq 'HASH');
@@ -289,6 +307,42 @@ sub new
 	}
 
 	return bless $config, $class;
+}
+
+=head2 config_file_names
+
+Purpose: the configuration files to read for a domain, most general first.
+
+A F<Host> header may carry a port, and CGI::Info keeps it in the domain name -
+F<example.com:443> - so that is the name the configuration is looked up under.
+The port is not part of the site's identity, though, and a site keeps one file per
+name, so the bare domain is read as well, underneath the port-specific file when
+that exists.  Config::Abstraction merges the files in the order it is given
+them, so the last name listed here is the one that wins.
+
+Returns: a list of file names.
+
+=cut
+
+sub config_file_names
+{
+	shift;	# The class, which this does not need
+	my %args = @_;
+
+	my @files = ('default');
+
+	my $domain = $args{'domain'};
+	if(defined($domain) && ($domain =~ /^(.+):\d+$/)) {
+		push(@files, $1);	# The site's own file, without the port on it
+	}
+	push(@files, $domain) if(defined($domain));
+
+	# An explicitly named file is the caller's choice, so it comes last
+	foreach my $name (@{ $args{'extra'} // [] }) {
+		push(@files, $name) if(defined($name));
+	}
+
+	return @files;
 }
 
 sub AUTOLOAD

@@ -283,7 +283,7 @@ subtest 'Rate Limiting with page.fcgi constants' => sub {
 	my $script_name = 'page';
 	
 	# Simulate requests up to limit
-	for my $i (1..$max_requests) {
+	for(1..$max_requests) {
 		my $count = $cache->get("$script_name:rate_limit:$client_ip") || 0;
 		$cache->set("$script_name:rate_limit:$client_ip", $count + 1, $time_window);
 	}

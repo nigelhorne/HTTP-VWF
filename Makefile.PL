@@ -37,7 +37,6 @@ WriteMakefile(
 		'CHI' => 0,
 		'Class::Simple' => 0,
 		'Config::Abstraction' => 0,
-		'Config::Auto' => 0,
 		'Crypt::URandom' => 0,		# CSPRNG for CSRF tokens
 		'Data::Throttler' => 0,
 		'Data::Validate::URI' => 0,

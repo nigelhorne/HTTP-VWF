@@ -17,7 +17,6 @@ requires 'Carp';
 requires 'Carp::Always';
 requires 'Class::Simple';
 requires 'Config::Abstraction';
-requires 'Config::Auto';
 requires 'Crypt::URandom';   # CSPRNG for CSRF tokens
 requires 'DBD::CSV';
 requires 'DBI';

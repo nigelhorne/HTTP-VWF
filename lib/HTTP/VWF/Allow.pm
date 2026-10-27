@@ -104,38 +104,59 @@ sub allow {
 				$interval = $throttle->{'interval'} // 90;  # Per 90 second window
 			}
 		}
-		# Handle YAML Errors
+		# The backend HTTP::VWF::Throttle supplies, rather than Data::Throttler's
+		# own YAML one, which reopens the store it has just locked: allowed where
+		# locks are advisory, not where they are mandatory (Windows).
+		require HTTP::VWF::Throttle;
+
+		my $error;
 		eval {
 			my $throttler = Data::Throttler->new(
 				max_items => $max_items,
 				interval => $interval,
-				backend => 'YAML',
+				backend => 'VWF',
 				backend_options => {
 					db_file => $db_file
 				}
 			);
 
-			unless($throttler->try_push(key => $addr)) {
-				$info->status(429);
-				if($logger) {
-					$logger->warn("$addr has been throttled");
+			if($throttler) {
+				unless($throttler->try_push(key => $addr)) {
+					$info->status(429);
+					if($logger) {
+						$logger->warn("$addr has been throttled");
+					}
+					_set_status($addr, 0);
+					throw Error::Simple("$addr has been throttled");
 				}
-				_set_status($addr, 0);
-				throw Error::Simple("$addr has been throttled");
+			} else {
+				# new() can also fail without dying, which would otherwise look
+				# like a client that is not over the limit
+				$error = 'Data::Throttler->new() returned no throttler';
 			}
+			1;
+		} or do {
+			$error = $@ || 'no error reported';
 		};
-		if($@) {
-			if(ref($@) && $@->isa('Error')) {
+
+		if(defined($error)) {
+			if(ref($error) && $error->isa('Error')) {
 				# Deliberate throttle block: re-throw so the caller sees the denial.
 				# Do NOT unlink the DB here -- that would erase the throttle window.
-				$@->throw();
+				$error->throw();
 			}
-			# Genuine YAML/IO error from Data::Throttler -- remove the corrupt file
-			# and fall through so this request is served (fail open).
+			# A store that cannot be consulted is not evidence that this client
+			# is abusive, so the request is served rather than refused - as in
+			# HTTP::VWF::Display, and see WHEN THE STORE CANNOT BE USED in
+			# HTTP::VWF::Throttle - but the store is left alone, since deleting
+			# it discards every client's counters and cannot repair a backend
+			# that is unusable, and the failure is reported loudly rather than
+			# tidied away.
 			if($logger) {
-				$logger->info("removing corrupt throttle DB $db_file: $@");
+				$logger->error("Throttling is not working, store $db_file left alone: $error");
+			} else {
+				carp("Throttling is not working, store $db_file left alone: $error");
 			}
-			unlink($db_file);
 		}
 
 		unless(($addr =~ /^192\.168\./) || $info->baidu()) {

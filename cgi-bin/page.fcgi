@@ -106,8 +106,20 @@ my $buffercache;
 my $script_dir = $info->script_dir();
 my $env_prefix = uc($info->host_name()) . '_';
 $env_prefix =~ tr/\./_/;	# dots in hostnames become underscores in env var names
-my $logger = Log::Abstraction->new(Config::Abstraction->new(env_prefix => $env_prefix, flatten => 0, config_file => $info->domain_name(), config_dirs => ["$script_dir/../conf/", "$script_dir/../../conf"])->all());
+# Config::Abstraction returns nothing, rather than an object, when no file
+# matches the domain: a vhost that has not been given a config file yet, the
+# command line test in the POD, or CI, where the hostname is a container id.
+# That is not fatal, so the logger is built with no configuration and the
+# framework carries on with its defaults - dying here would take the site down
+# over a configuration file that is only there to describe it.  The reason is
+# reported once rather than on every request.
+my $config_abstraction = Config::Abstraction->new(env_prefix => $env_prefix, flatten => 0, config_file => $info->domain_name(), config_dirs => ["$script_dir/../conf/", "$script_dir/../../conf"]);
+my $logger = Log::Abstraction->new($config_abstraction ? $config_abstraction->all() : {});
 Log::WarnDie->dispatcher($logger);
+
+unless($config_abstraction) {
+	$logger->warn('No configuration file for ', ($info->domain_name() // '(unknown host)'), " in $script_dir/../conf/ or $script_dir/../../conf; using the defaults");
+}
 
 # my $pagename = "HTTP::VWF::Display::$script_name";
 # eval "require $pagename";

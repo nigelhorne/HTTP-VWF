@@ -147,9 +147,9 @@ what runs.
     directory holding the site's `templates/`, as described.
 
     Both the plain form the document shows and the XML form the example uses are
-    read - `Config::Abstraction` takes either, and so does `Config::Auto`, which a
-    site's own code may still be reading its configuration with.  A site whose
-    configuration is already written the old way does not have to be converted.
+    read - `Config::Abstraction` takes either, and it is the only reader the
+    framework uses.  A site whose configuration is already written the old way
+    does not have to be converted.
     Note that the snippet in the document is a description rather than a file to
     copy: it writes `root_dir /path` with a space but `memory_cache:` and
     `disc_cache:` with colons, and a file mixing the two separators is liable to
@@ -157,7 +157,7 @@ what runs.
     being in a format that can be read.
 
     `t/config-format.t` holds this: it writes each form in a temporary directory
-    and reads it back through each reader.
+    and reads it back.
 
     The document's own FIXME - "Configuration files should be in .../conf, not
     .../lib/conf" - is honoured: a site's `conf/` sits at the top of the search
@@ -268,6 +268,101 @@ what runs.
     Because the page's class path is part of the template path,
     `.../VWF/Display/` becomes `.../HTTP/VWF/Display/`.
 
+## Migrating a Site From VWF
+
+A site that used VWF before this distribution existed carries its own copy of
+the modules on its `@INC`, and a `cgi-bin/page.fcgi` it has edited ever since.
+Moving it over is a change of module names, of where the configuration lives,
+and of which files the site still needs.  The steps can be taken one at a time,
+each checked before the next is started.
+
+- 1. Install this distribution, and stop carrying VWF
+
+    Remove the site's own copy of VWF from its `@INC` - usually a `lib/VWF/`
+    directory among its modules - and install this distribution in its place:
+
+    ```sh
+    cpanm HTTP::VWF
+    ```
+
+    Modules the site owns keep their names: a `BBPortal::Display::news` is not
+    VWF's, and does not move.
+
+- 2. Rename the framework's namespace in the site's code
+
+    Every `VWF::` the site mentions becomes `HTTP::VWF::`.  That is the `use`
+    lines in its page script (`VWF::Allow`, `VWF::Config`, `VWF::Utils`,
+    `VWF::Data::vwf_log`, `VWF::CAPTCHA`, `VWF::Display::captcha` and the rest),
+    the `use parent` of each of its own page classes, and any class name built
+    as a string - `"VWF::Display::$page"` here is `"HTTP::VWF::Display::$page"`.
+
+- 3. Move the framework's templates down one level
+
+    The template path follows the class name, so `templates/en/web/VWF/Display/`
+    becomes `templates/en/web/HTTP/VWF/Display/`.  The site's own page classes
+    are unaffected: `.../BBPortal/Display/` stays where it is.
+
+- 4. Put the configuration in the site's own `conf/`
+
+    Move `~/lib/conf/<domain>` - and anything under `/usr/lib/conf/`, the
+    location VWF's own README names - to `conf/<domain>` beside `cgi-bin/`.
+    The file itself needs no editing: the plain `key value` form the README
+    shows and the XML form its example uses are both read from either location,
+    by `Config::Abstraction`.  `conf/example.com` in this distribution is an
+    example to copy.
+
+    The site's `conf/` is searched first, so a setting in it cannot be
+    overridden by an old copy left in `~/lib/conf`.  Delete that copy anyway:
+    VWF's own `VWF::Config` merges those directories the other way round, and
+    where it is still running a leftover file there wins.
+
+    Do not bring per-port copies across.  A request whose `Host` header carries
+    a port, `example.com:443`, is looked up under that name and then under
+    `example.com` beneath it, so one file serves every port the site is reached
+    on.
+
+- 5. Decide whether the site keeps its own page script
+
+    - A site whose pages are all the framework's can take this distribution's
+      `cgi-bin/page.fcgi` as it stands.  Its databases, data modules, languages
+      and addresses then come from the configuration file - see Site Settings -
+      and it need not be edited to keep the behaviour it had, since each
+      default is the value the old script carried.
+
+    - A site with pages of its own keeps its script, because that is what loads
+      them: `BBPortal::Display::$page` is not something the shipped script
+      knows about.  Rename the namespaces as in step 2 and leave the rest as it
+      is.  The settings in Site Settings reach a site only when its script asks
+      for them; the `config_list()` helper that reads them lives in
+      `page.fcgi` rather than in a module, so copy it, or read the
+      configuration hash directly, if the site wants them.
+
+- 6. Check the prerequisites, and anything the site had of its own
+
+    Two modules are optional here although a VWF site may have installed them:
+    `Filesys::Df` and `XML::LibXML`, neither of which builds everywhere - see
+    Optional Prerequisites.  An existing throttle store carries over unchanged:
+    it is the same YAML file, named by `throttle->{file}`, with `max_items` and
+    `interval` as they were.  So does an access log named by `vwflog`.
+
+- 7. Run the site before it is deployed
+
+    From the site's own `cgi-bin`, the line the script's header gives:
+
+    ```sh
+    LANG=en_GB root_dir=$(pwd)/.. ./page.fcgi page=index
+    ```
+
+    The web server's configuration does not change, unless the site named its
+    script `index.fcgi` where this distribution names it `page.fcgi`.
+
+- 8. Keep the two in step
+
+    A change made to one of the copied modules belongs in VWF as well.
+    `t/vwf-sync.t` fails for anything here that VWF has not got, which is what
+    keeps the next site's migration a rename rather than a port - see Keeping
+    in Step With VWF.
+
 ## Site Settings
 
 A site describes itself in the configuration file named after its domain, in
@@ -318,6 +413,16 @@ so one cannot drift unnoticed.
 
     Addresses exempt from rate limiting.  Default: `127.0.0.1` and `192.168.1.1` -
     loopback, and one private address.
+
+- `throttle`
+
+    `file` names the throttle store, `max_items` is how many requests one address
+    may make in `interval` seconds, and both default to the values the framework has
+    always used: a file called `throttle` in the site's temporary directory, and 30
+    requests per 90 seconds.  A store that cannot be used is reported at error level
+    and the request is served, rather than every visitor being refused for a fault of
+    the server - see [HTTP::VWF::Throttle](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3AThrottle),
+    in particular "WHEN THE STORE CANNOT BE USED".
 
 - `pages`
 

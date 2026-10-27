@@ -148,6 +148,7 @@ use Template::Plugin::Math;
 use Template::Plugin::JSON;
 use HTML::SocialMedia;
 use HTTP::VWF::Blacklist;
+use HTTP::VWF::Config;
 use HTTP::VWF::Utils qw(create_memory_cache);
 use Error;
 use File::pfopen;
@@ -207,7 +208,7 @@ sub new
 	# Load 'default' first so that domain-specific values override the defaults.
 	my $config;
 	eval {
-		if($config = Config::Abstraction->new(config_dirs => [$config_dir], config_files => ['default', $info->domain_name()], logger => $params->{'logger'})) {
+		if($config = Config::Abstraction->new(config_dirs => [$config_dir], config_files => [HTTP::VWF::Config->config_file_names(domain => $info->domain_name())], logger => $params->{'logger'})) {
 			$config = $config->all();
 		}
 	};
@@ -222,7 +223,9 @@ sub new
 	}
 
 	unless($info->is_search_engine() || !defined($ENV{'REMOTE_ADDR'})) {
-		if(my $params = $info->params()) {
+		# Named apart from the caller's $params, which holds the logger, the
+		# language and the rest: this one is only the request's parameters
+		if(my $cgi_params = $info->params()) {
 			# Intrusion Detection System integration
 			require CGI::IDS;
 			CGI::IDS->import();
@@ -230,7 +233,7 @@ sub new
 			my $ids = CGI::IDS->new();
 			$ids->set_scan_keys(scan_keys => 1);
 
-			my $impact = $ids->detect_attacks(request => $params);
+			my $impact = $ids->detect_attacks(request => $cgi_params);
 			my $threshold = $config->{security}->{ids_threshold} // 50;
 			if($impact > $threshold) {
 				croak($ENV{'REMOTE_ADDR'}, ": IDS impact is $impact");	# Block detected attacks
@@ -238,32 +241,57 @@ sub new
 		}
 
 		if($ENV{'REMOTE_ADDR'}) {
-			# Connection throttling system
-			require Data::Throttler;
+			# Connection throttling system.  HTTP::VWF::Throttle supplies the
+			# 'VWF' backend, which reads and writes the store through the handle
+			# that holds the lock; Data::Throttler's YAML backend reopens it,
+			# which fails wherever locks are mandatory (Windows)
+			require HTTP::VWF::Throttle;
 
 			my $db_file = $config->{'throttle'}->{'file'} // File::Spec->catdir($info->tmpdir(), 'throttle');
 
-			# The eval only finds out whether the client is over the limit,
-			# so that it catches errors from a broken YAML file and nothing
-			# else.  A "return" in here would leave only the eval, not new().
-			my $throttled = eval {
+			# The eval only finds out whether the client is over the limit - a
+			# "return" in here would leave only the eval, not new() - and catches
+			# a backend that cannot be used at all.
+			my($throttled, $error);
+			eval {
 				my %options = (
 					max_items => $config->{'throttle'}->{'max_items'} // 30,	# Allow 30 requests
 					interval => $config->{'throttle'}->{'interval'} // 90,	# Per 90 second window
-					backend => 'YAML',
+					backend => 'VWF',
 					backend_options => {
 						db_file => $db_file
 					}
 				);
 
 				my $throttler = Data::Throttler->new(%options);
-				$throttler && !$throttler->try_push(key => $ENV{'REMOTE_ADDR'});
-			};
-			if($@) {
-				if($params->{'logger'}) {
-					$params->{'logger'}->notice("Removing unparsable YAML file $db_file: $@");
+				if($throttler) {
+					$throttled = !$throttler->try_push(key => $ENV{'REMOTE_ADDR'});
+				} else {
+					# new() can also fail without dying, which would otherwise
+					# look like a client that is not over the limit
+					$error = 'Data::Throttler->new() returned no throttler';
 				}
-				unlink($db_file);
+				1;
+			} or do {
+				$error = $@ || 'no error reported';
+			};
+
+			if(defined($error)) {
+				# A store that cannot be consulted is not evidence that this
+				# client is abusive, so the request is served rather than refused:
+				# refusing would answer every visitor for a fault of this machine,
+				# and would make the throttle the thing that takes the site down.
+				# It is not quiet, though - reported at error level, because a
+				# site that has stopped throttling anybody is a security problem,
+				# not a warning - and the store is left alone, since deleting it
+				# discards every client's counters and cannot repair a backend
+				# that is unusable.  See WHEN THE STORE CANNOT BE USED in
+				# HTTP::VWF::Throttle.
+				if(my $logger = $params->{'logger'}) {
+					$logger->error("Throttling is not working, store $db_file left alone: $error");
+				} else {
+					carp("Throttling is not working, store $db_file left alone: $error");
+				}
 			} elsif($throttled) {
 				$info->status(429);	# Too many requests
 				sleep(1);	# Slow down attackers
@@ -485,7 +513,7 @@ sub get_template_path
 	}
 
 	# FIXME: reread the config file since something is cloberring it
-	if(my $config = Config::Abstraction->new(config_dirs => [$self->{config_dir}], config_files => ['default', $self->{info}->domain_name()], logger => $self->{logger})) {
+	if(my $config = Config::Abstraction->new(config_dirs => [$self->{config_dir}], config_files => [HTTP::VWF::Config->config_file_names(domain => $self->{info}->domain_name())], logger => $self->{logger})) {
 		$config = $config->all();
 		$self->{config} = $self->{_config} = $config;
 	}

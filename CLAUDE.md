@@ -40,6 +40,7 @@ prove t/
 # Single test file
 perl t/security_tests.t
 perl t/blacklist.t
+perl t/allow_throttle.t
 perl t/config-format.t
 
 # These two have no .t suffix, so prove t/ skips them; CI runs them by name
@@ -122,6 +123,7 @@ without `lib/perl5`.
 | `HTTP::VWF::Blacklist` | `lib/HTTP/VWF/Blacklist.pm` | The country blacklist, shared by `page.fcgi`, `HTTP::VWF::Allow` and `HTTP::VWF::Display` |
 | `HTTP::VWF::Utils` | `lib/HTTP/VWF/Utils.pm` | Cache initialisation (CHI), Haversine distance |
 | `HTTP::VWF::CAPTCHA` | `lib/HTTP/VWF/CAPTCHA.pm` | reCAPTCHA integration and bypass logic |
+| `HTTP::VWF::Throttle` | `lib/HTTP/VWF/Throttle.pm` | The `VWF` Data::Throttler backend: reads and writes the throttle store through the handle that holds its lock |
 
 ### Template Resolution
 
@@ -185,14 +187,24 @@ site can move one file at a time: one that still keeps its configuration in
 `VWF::Config` - which the live sites load from `~/lib/perl5` - merges the
 directories the other way round, so there a leftover `~/lib/conf` file still
 wins, which is why a migrated site's old copy should be removed rather than left
-behind.  `~/concert-bands.co.uk` and `~/bandsman.co.uk` have been migrated: their
-`<domain>` and `<domain>:443` files are in the site's `conf/` and no longer in
-`~/lib/conf`.  `bandsman.co.uk:80` stays in `~/lib/conf`, the site having no copy
-under that name, and the other sites still keep theirs in `~/lib/conf`.  When
-neither location has a domain config, `Config::Abstraction` falls back to
-`local.yaml` there instead of failing, so a missing file is not reported -
-inspect `config_path` when a site looks wrong rather than assuming the domain
-file was read.
+behind.  `~/concert-bands.co.uk` and `~/bandsman.co.uk` have been migrated:
+their `<domain>` files are in the site's `conf/` and no longer in `~/lib/conf`.
+A `Host` header that carries a port is looked up under `<domain>:<port>`, and
+the bare domain's file is read underneath it, so per-port copies are not
+needed: the ones these sites had, and `bandsman.co.uk:80` and
+`concert-bands.com:443` in `~/lib/conf`, have been removed.  The other sites
+still keep theirs in `~/lib/conf`.  When neither location has a domain config,
+`Config::Abstraction` falls back to `local.yaml` there instead of failing, so a
+missing file is not reported - inspect `config_path` when a site looks wrong
+rather than assuming the domain file was read.
+
+When there is no configuration file for the host at all - a vhost whose file has
+not been written yet, the command line test in the POD, or the Linux workflow,
+where the hostname is a container id - `HTTP::VWF::Config` builds an empty
+configuration rather than failing, and `cgi-bin/page.fcgi` builds its logger the
+same way and says so once, so the framework carries on with its defaults.  That
+failure took the Linux workflow's page renders down with a 500 until it was
+fixed; `t/config-format.t` now holds it.
 
 The CSRF token requires a secret to be set in config:
 
@@ -233,7 +245,29 @@ else gets a 404.
 
 `HTTP::VWF::Display::new()` also throttles (Data::Throttler, `throttle` config:
 default 30 requests per 90 seconds) and returns `undef` with status 429 for a
-throttled client; `page.fcgi` then sends a 429 with `Retry-After`.
+throttled client; `page.fcgi` then sends a 429 with `Retry-After`.  It asks for
+the `VWF` backend from `HTTP::VWF::Throttle` rather than Data::Throttler's own
+YAML one, which locks the store and then reopens it by name to read and write:
+Unix permits that, Windows does not, because its locks are mandatory and a
+second handle cannot touch the locked region.  There every read failed, the
+caller deleted the store it took for corrupt, and throttling quietly stopped.
+That error path now leaves the store alone and reports the failure at error
+level, serving the request unthrottled; a store that cannot be parsed is rebuilt
+by the backend rather than deleted, so a damaged file heals on the next request.
+Serving it is the decision rather than an oversight: refusing would answer every
+visitor with a 429 for a fault of the server, and would make the throttle -
+whose purpose is to keep the site serving - the thing that takes it down.  The
+reasoning is recorded under WHEN THE STORE CANNOT BE USED in
+`HTTP::VWF::Throttle`, and `t/display_throttle.t` and `t/allow_throttle.t` hold
+it in place, the second also checking that a store which can be used still
+refuses an abusive client.
+
+`HTTP::VWF::Allow` has a throttle of its own, and it is the first one a request
+meets: it now follows the same policy, and asks for the same `VWF` backend
+instead of Data::Throttler's `YAML` one.  The two together matter on a platform
+whose locks are mandatory, where the `YAML` backend could never read the store:
+Allow deleted the store it took for corrupt on every request, so it never
+survived from one request to the next and nobody was throttled at all.
 
 The CSV access log (`vwf.log`) passes every field through `_csv_escape()` to
 prevent CSV injection and spreadsheet formula injection.
