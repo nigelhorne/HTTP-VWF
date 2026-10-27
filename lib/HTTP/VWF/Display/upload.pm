@@ -5,13 +5,12 @@ our $VERSION = '0.01';
 use warnings;
 use strict;
 
-use HTTP::VWF::Display;
+use HTTP::VWF::Display ();
 
 our @ISA = ('HTTP::VWF::Display');
 
 sub html {
 	my $self = shift;
-	my %args = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
 
 	my $info = $self->{_info};
 	die 'Missing _info in object' unless $info;
@@ -50,7 +49,7 @@ sub html {
 
 	open(my $fout, '>>', '/tmp/NJH');
 
-	use Data::Dumper;
+	use Data::Dumper ();
 
 	print $fout Data::Dumper->new([\$params])->Dump();
 

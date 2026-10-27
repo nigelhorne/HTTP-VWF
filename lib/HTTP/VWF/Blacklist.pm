@@ -11,9 +11,9 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Params::Get;
-use Params::Validate::Strict;
-use Readonly;
+use Params::Get ();
+use Params::Validate::Strict ();
+use Readonly qw(Readonly);
 
 our $VERSION = '0.01';
 

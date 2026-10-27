@@ -4,8 +4,8 @@ our $VERSION = '0.01';
 
 use strict;
 use warnings;
-use LWP::UserAgent;
-use JSON::MaybeXS;
+use LWP::UserAgent ();
+use JSON::MaybeXS qw(decode_json);
 
 sub new {
 	my ($class, %args) = @_;

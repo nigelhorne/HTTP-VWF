@@ -31,16 +31,16 @@ no warnings qw(experimental::signatures);
 use Exporter qw(import);
 our @EXPORT = qw(create_disc_cache create_memory_cache distance);
 
-use CHI;
-use DBI;
+use CHI ();
+use DBI ();
 use Error::Simple;
 use File::Path ();	# make_path, for a cache directory that is not there yet
 use Module::Runtime qw(require_module);	# Safe dynamic loading; avoids string eval
-use Params::Get 0.13;
-use Try::Tiny;
-use Carp qw(croak carp);
+use Params::Get 0.13 ();
+use Try::Tiny qw(catch try);
+use Carp qw(croak);
 use Scalar::Util qw(looks_like_number);
-use Math::Trig qw(deg2rad rad2deg asin great_circle_distance);
+use Math::Trig qw(asin deg2rad);
 
 # Constants for distance calculations
 use constant {

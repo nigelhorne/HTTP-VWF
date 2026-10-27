@@ -9,7 +9,7 @@ use strict;
 use warnings;
 
 use Database::Abstraction;
-use DBD::CSV;
+use DBD::CSV ();
 
 our @ISA = ('Database::Abstraction');
 

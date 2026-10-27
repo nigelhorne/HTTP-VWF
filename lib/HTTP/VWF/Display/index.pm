@@ -9,9 +9,9 @@ our $VERSION = '0.01';
 use strict;
 use warnings;
 
-use Carp;
-use HTTP::VWF::Display;
-use String::Random;
+use Carp qw(croak);
+use HTTP::VWF::Display ();
+use String::Random ();
 
 our @ISA = ('HTTP::VWF::Display');
 

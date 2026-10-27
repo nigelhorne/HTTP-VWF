@@ -22,7 +22,7 @@ package HTTP::VWF::Throttle;
 use strict;
 use warnings;
 
-use Data::Throttler;	# For Data::Throttler::Backend::YAML, which this extends
+use Data::Throttler ();	# For Data::Throttler::Backend::YAML, which this extends
 
 our $VERSION = '0.01';
 
@@ -97,7 +97,9 @@ The failure is reported at error level on each request that meets it, because a
 site that has stopped throttling anybody is a security problem rather than a
 warning.  A store that cannot be I<parsed> is a different case and heals itself:
 C<load()> returns an empty store, C<backend_store_ok()> says so, and the caller
-rebuilds the bucket chain over the unusable file.
+rebuilds the bucket chain over the unusable file.  A store that parses but holds
+no bucket chain parameters is healed the same way, and just as quietly - see
+L</_chain_is_usable>.
 
 =item * And nothing is deleted
 
@@ -118,6 +120,10 @@ C<HTTP::VWF::Throttle> itself, which exists only to load them.
 =head2 load
 
 Purpose: read the store, through the locked handle when there is one.
+
+A store whose chain carries no bucket chain parameters comes back without that
+chain, so that the caller rebuilds it silently rather than after comparing two
+undefined values with the ones it was given - see L</_chain_is_usable>.
 
 Returns: the throttler's data, with its bucket chain restored.
 
@@ -155,6 +161,21 @@ sub load
 	$data = {} if($@ || ref($data) ne 'HASH');
 	$self->native_classes_restore($data);
 
+	# A store that parses but holds no bucket chain parameters is the one case
+	# Data::Throttler cannot rebuild quietly.  native_classes_restore() has
+	# just blessed its chain into a bucket chain, so backend_store_ok() would
+	# call the store usable, and Data::Throttler then compares that chain's
+	# max_items and interval - both undef - with the ones it was given.  That
+	# comparison warns once per value and then reports the parameters as
+	# changed, discarding a chain that was never usable to begin with.
+	#
+	# A store handed back without that chain never reaches the comparison: the
+	# `if($data->{chain} and ...)` in Data::Throttler's new() is false, and
+	# backend_store_ok() below says the chain cannot be reused, which is what
+	# makes it build a chain - with the parameters it was given - and save the
+	# store.  The repair is the one that happened before, minus the warnings.
+	delete $data->{'chain'} unless($self->_chain_is_usable($data->{'chain'}));
+
 	return $data;
 }
 
@@ -181,7 +202,32 @@ sub backend_store_ok
 	my $data = eval { $self->load() };
 	return 0 if($@ || ref($data) ne 'HASH');
 
-	return ref($data->{'chain'}) eq 'Data::Throttler::BucketChain';
+	return $self->_chain_is_usable($data->{'chain'});
+}
+
+=head2 _chain_is_usable
+
+Purpose: whether a chain loaded from the store carries the parameters
+C<Data::Throttler> compares a store against.
+
+A chain is usable when it is a bucket chain that knows the C<max_items> and
+C<interval> it was built with.  C<chain: {}> in a store is the case this
+catches: it parses, it restores to a bucket chain, and it has neither parameter
+on it - so C<Data::Throttler> would compare two undefined values against the
+configured ones, and rebuild the chain after reporting the change.
+
+Returns: true if the chain can be reused as it stands.
+
+=cut
+
+sub _chain_is_usable
+{
+	# No invocant to use: the only thing this reads is the chain it is handed
+	my(undef, $chain) = @_;
+
+	return 0 unless(ref($chain) eq 'Data::Throttler::BucketChain');
+
+	return defined($chain->{'max_items'}) && defined($chain->{'interval'});
 }
 
 =head2 save

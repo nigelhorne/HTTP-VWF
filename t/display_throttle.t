@@ -106,12 +106,42 @@ sub new_request {
 }
 
 subtest 'an unusable store is left alone and reported' => sub {
-	my $store = File::Spec->catfile($dir, 'locked');
+	# A path that no store can be opened at.  A read-only file will not do:
+	# the backend opens the path for writing, and a test run as root - which
+	# is what a container-based CI job does - is stopped by no file mode at
+	# all.  It then rebuilds the store it could read and reports nothing, and
+	# this test would pass for the wrong reason on one machine and fail on
+	# another.  A directory cannot be opened for writing by anybody.
+	my $store = File::Spec->catdir($dir, 'locked');
+	mkdir($store, 0755) or die "mkdir $store: $!";
+	@RecordingLogger::calls = ();
+
+	my $display = HTTP::VWF::Display->new(
+		info => CGI::Info->new(),
+		lingua => StubLingua->new('GB'),
+		logger => RecordingLogger->new(),
+		config => { throttle => { file => $store, max_items => 2, interval => 90 } },
+	);
+
+	ok(defined($display), 'the request is still served');
+	ok(-e $store, 'the store was not deleted');
+	ok(scalar(grep { $_->[0] eq 'error' && $_->[1] =~ /Throttling is not working/ } @RecordingLogger::calls),
+		'and the failure was reported at error level');
+};
+
+# A directory survives whatever happens to it - unlink() cannot remove one - so
+# the store that must not be deleted is a file here, made read-only so that the
+# backend cannot write it.  Root ignores file modes, and Windows reports a $>
+# of 0 without having any root and does not keep its read-only attribute for the
+# Unix mode, so where either applies there is no read-only store to offer and
+# the directory above is all there is.
+SKIP: {
+	skip 'no read-only file to be had here', 1 if($> == 0);
+
+	my $store = File::Spec->catfile($dir, 'read-only');
 	open(my $fout, '>', $store) or die "$store: $!";
 	print $fout "chain: {}\n";
 	close($fout) or die "$store: $!";
-
-	# Nothing can open this for writing, so Data::Throttler cannot lock it
 	chmod(0444, $store) or die "chmod $store: $!";
 	@RecordingLogger::calls = ();
 
@@ -122,12 +152,8 @@ subtest 'an unusable store is left alone and reported' => sub {
 		config => { throttle => { file => $store, max_items => 2, interval => 90 } },
 	);
 
-	chmod(0644, $store) or die "chmod $store: $!";
-
-	ok(defined($display), 'the request is still served');
-	ok(-e $store, 'the store was not deleted');
-	ok(scalar(grep { $_->[0] eq 'error' && $_->[1] =~ /Throttling is not working/ } @RecordingLogger::calls),
-		'and the failure was reported at error level');
+	ok($display && -e $store && (-s $store > 0),
+		'a store that could not be written is served around, and left as it was');
 };
 
 subtest 'an unparsable store is rebuilt, not deleted' => sub {
@@ -151,6 +177,41 @@ subtest 'an unparsable store is rebuilt, not deleted' => sub {
 		my $data = eval { YAML::LoadFile($store) };
 		is(ref($data), 'HASH', 'and has been replaced by a usable store');
 	}
+};
+
+subtest 'a store with no bucket chain parameters is rebuilt without a word' => sub {
+	my $store = File::Spec->catfile($dir, 'no-parameters');
+
+	# A store that parses, and holds a chain, and has neither of the two
+	# parameters Data::Throttler compares a store against.  Its chain restores
+	# to a bucket chain, so the store looks reusable, and the chain is built
+	# again either way - but the comparison it reaches is two undefined values
+	# against the configured ones, which is a warning apiece and then the
+	# parameters reported as changed.  Neither should be necessary.
+	open(my $fout, '>', $store) or die "$store: $!";
+	print $fout "chain: {}\n";
+	close($fout) or die "$store: $!";
+
+	my @warnings;
+	local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+
+	my $display = HTTP::VWF::Display->new(
+		info => CGI::Info->new(),
+		lingua => StubLingua->new('GB'),
+		config => { throttle => { file => $store, max_items => 2, interval => 90 } },
+	);
+
+	ok(defined($display), 'the request is served');
+
+	is(scalar(grep { /uninitialized/ } @warnings), 0,
+		'and no undefined value was warned about') or diag(@warnings);
+
+	my $data = eval { YAML::LoadFile($store) };
+	is(ref($data), 'HASH', 'the store was rebuilt in place');
+
+	my $chain = (ref($data) eq 'HASH' && ref($data->{'chain'}) eq 'HASH') ? $data->{'chain'} : {};
+	is($chain->{'max_items'}, 2, 'with the configured max_items on its chain');
+	is($chain->{'interval'}, 90, 'and the configured interval');
 };
 
 done_testing();

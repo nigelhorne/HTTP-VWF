@@ -4,11 +4,16 @@
 # njh@bandsman.co.uk
 
 # Can be tested at the command line, e.g.:
-#	LANG=en_GB root_dir=$(pwd)/.. ./page.fcgi page=index
+#	LANG=en_GB root_dir=$(realpath $(pwd)/..) ./page.fcgi page=index
 # To mimic a French mobile site:
-#	root_dir=$(pwd)/.. ./page.fcgi --mobile page=index lang=fr
+#	root_dir=$(realpath $(pwd)/..) ./page.fcgi --mobile page=index lang=fr
 # To turn off the linting of HTML on a search-engine landing page
-#	LANG=en_GB root_dir=$(pwd)/.. ./page.fcgi --search-engine page=index lint_content=0
+#	LANG=en_GB root_dir=$(realpath $(pwd)/..) ./page.fcgi --search-engine page=index lint_content=0
+# root_dir is the directory holding templates/, and it has to be absolute and
+# free of "..": the framework refuses a template path containing "../", as a
+# guard against a root_dir that escapes the site.  realpath resolves the one the
+# shell would otherwise leave in, so these lines work as they are written; run
+# from the site's own directory, root_dir=$(pwd) is already resolved.
 
 use strict;
 use warnings;

@@ -119,20 +119,46 @@ jobs:
           use strict;
           use warnings;
           use File::Find;
-          use lib 'lib';
           my @failed;
+          # Every module these files use resolves to a stub, so what this step
+          # catches is a file that will not compile: a missing or misspelled
+          # dependency is for the installer and the tests to catch, not here.
+          # lib is not put on @INC either: each module is compiled from its own
+          # file, once, by the loop below.
           push @INC, sub { open my $h, '<', \qq{1;\n}; $h };
           my @dirs = grep { -d } qw(lib bin);
           @dirs = ('.') unless @dirs;
+          my $checked = 0;
           find({ wanted => sub {
               return unless -f && /\.pm$/;
               my $file = $File::Find::name;
-              do $file;
+              $checked++;
+              # "./" so that perl compiles this file.  A bare relative path is
+              # looked for in @INC, where the stub answers for every name, so
+              # `do $file` returned "1;" for each module and read none of them
+              # - a sweep that passed whatever the modules said.  "./" is not
+              # searched for in @INC, so do() has to open the real file.
+              my $compiled = do "./$file";
               if ($@) {
                   warn "Syntax check failed: $file\n";
                   push @failed, $file;
+              } elsif (!defined $compiled) {
+                  # do() answered undef with nothing in $@: the file was not
+                  # read at all, which must not count as a pass either.
+                  warn "Could not compile $file\n";
+                  push @failed, $file;
               }
           }, no_chdir => 1 }, @dirs);
+
+          # A sweep that found nothing is not an all-clear.  A lib/ that has
+          # moved, or a filter that matches nothing, would otherwise report
+          # the same success as a tree of clean modules.
+          if($checked) {
+              print "Syntax checked $checked module(s)\n";
+          } else {
+              warn "Nothing under @dirs to syntax check\n";
+              push @failed, 'no modules';
+          }
 
           if (($ENV{RUNNER_OS} // '') eq 'Linux') {
               # A finding fails the step, as it does for the two -c -Mwarnings::unused
@@ -182,20 +208,48 @@ jobs:
 
       - name: Run Perl::Critic
         if: matrix.perl == '5.42' && matrix.os == 'ubuntu-latest'
-        continue-on-error: true
         run: |
           eval $(perl -I ~/perl5/lib/perl5 -Mlocal::lib)
           cpanm --notest Perl::Critic
-          perlcritic --severity 3 lib/ || true
+          # A finding at severity 5 - perlcritic's default, and the level
+          # .perlcriticrc is written for - fails the build.  lib/ is clean at
+          # that level, so this is a check that can fail rather than a report:
+          # severity 3 has 178 findings that predate this workflow, and gating
+          # on those would fail every run.
+          perlcritic --severity 5 lib/
         shell: bash
 
-      - name: Check imports with perlimports
+      - name: Perl::Critic report (advisory)
         if: matrix.perl == '5.42' && matrix.os == 'ubuntu-latest'
         continue-on-error: true
         run: |
           eval $(perl -I ~/perl5/lib/perl5 -Mlocal::lib)
+          cpanm --notest Perl::Critic
+          # Advisory, so it cannot fail the build and cannot vouch for the
+          # tree: it is here to show the debt that severity 3 finds.  What
+          # stood here before was `perlcritic --severity 3 lib/ || true` in a
+          # continue-on-error step, so a crash and a run with 178 findings
+          # both looked like a pass; a finding now shows as a failed,
+          # tolerated step.
+          perlcritic --severity 3 lib/
+        shell: bash
+
+      - name: Check imports with perlimports
+        if: matrix.perl == '5.42' && matrix.os == 'ubuntu-latest'
+        run: |
+          eval $(perl -I ~/perl5/lib/perl5 -Mlocal::lib)
           cpanm --notest App::perlimports
-          find lib -name '*.pm' | xargs perlimports --lint
+          # A gate, not a report: perlimports --lint exits non-zero when it
+          # would change a file, and that status is the step's, so a suggestion
+          # fails the build.  Every module in lib/ is clean at this severity --
+          # the advice it gave has been taken -- so a failure here is a new one.
+          # There is no handler on the command and no continue-on-error above
+          # to turn that failure into a pass.
+          #
+          # --no-padding because this tree writes its import lists as
+          # qw(foo), never qw( foo ): the check holds the imports, it does not
+          # restyle them.
+          find lib -name '*.pm' | xargs perlimports --lint --no-padding
         shell: bash
 
       - name: Test coverage

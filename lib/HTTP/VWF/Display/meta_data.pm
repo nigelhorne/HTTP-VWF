@@ -11,14 +11,14 @@ use warnings;
 
 use parent 'HTTP::VWF::Display';
 
-use List::Util qw(max);
-use POSIX qw(strftime);
-use Readonly;
-use System::Info;
+use List::Util ();
+use POSIX ();
+use Readonly qw(Readonly);
+use System::Info ();
 use Sys::Uptime;
-use Sys::MemInfo;
-use Time::Piece;
-use Time::Seconds;
+use Sys::MemInfo ();
+use Time::Piece qw(gmtime localtime);
+use Time::Seconds qw(ONE_DAY ONE_HOUR);
 
 # Filesys::Df needs the statvfs/statfs interfaces, and its own Makefile.PL
 # refuses to build on Windows, so it is an optional prerequisite: load it at
@@ -117,7 +117,7 @@ sub get_server_metrics {
 # ------------------------------
 
 sub get_traffic_metrics {
-	my ($self, $vwf_log, $domain_name) = @_;
+	my (undef, $vwf_log, $domain_name) = @_;
 	my $metrics = {};
 
 	# Current time and one hour ago (local time)
@@ -168,7 +168,7 @@ sub get_traffic_metrics {
 }
 
 sub get_request_rate_24h {
-	my ($self, $vwf_log, $domain_name) = @_;
+	my (undef, $vwf_log, $domain_name) = @_;
 
 	my $now = time();
 	my $start = $now - ONE_DAY + _utc_offset();
@@ -220,7 +220,7 @@ sub get_request_rate_24h {
 }
 
 sub get_latency_24h {
-	my ($self, $vwf_log, $domain_name) = @_;
+	my (undef, $vwf_log, $domain_name) = @_;
 
 	my $start = time() - ONE_DAY + _utc_offset();
 
@@ -269,7 +269,7 @@ sub get_latency_24h {
 }
 
 sub get_slow_endpoints_24h {
-	my ($self, $vwf_log, $domain_name) = @_;
+	my (undef, $vwf_log, $domain_name) = @_;
 
 	my $start = time() - ONE_DAY + _utc_offset();
 

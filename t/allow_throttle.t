@@ -80,21 +80,19 @@ sub allow_from {
 }
 
 subtest 'a store that cannot be used does not refuse the client' => sub {
-	my $store = File::Spec->catfile($dir, 'unusable');
-	open(my $fout, '>', $store) or die "$store: $!";
-	print $fout "chain: {}\n";
-	close($fout) or die "$store: $!";
-
-	# Nothing can open this for writing, so Data::Throttler cannot lock it
-	chmod(0444, $store) or die "chmod $store: $!";
+	# A path that no store can be opened at.  A read-only file will not do:
+	# the backend opens the path for writing, and a test run as root - which is
+	# what a container-based CI job does - is stopped by no file mode at all,
+	# so the failure this subtest is about never happens.  A directory cannot
+	# be opened for writing by anybody.
+	my $store = File::Spec->catdir($dir, 'unusable');
+	mkdir($store, 0755) or die "mkdir $store: $!";
 	@RecordingLogger::calls = ();
 
 	my ($allowed, $error) = allow_from('10.10.10.1',
 		logger => RecordingLogger->new(),
 		config => { throttle => { file => $store, max_items => 2, interval => 90 } },
 	);
-
-	chmod(0644, $store) or die "chmod $store: $!";
 
 	# The failure has to be the store, not something else the eval caught
 	my $reported = scalar grep { $_->[0] eq 'error' && ($_->[1] =~ /Throttling is not working/) && ($_->[1] =~ /\Q$store\E/) }
@@ -104,6 +102,31 @@ subtest 'a store that cannot be used does not refuse the client' => sub {
 	ok(!$error, 'and nothing was thrown at the caller');
 	ok(-e $store, 'the store was not deleted');
 	ok($reported, 'and the failure was reported at error level');
+};
+
+# A directory survives whatever happens to it - unlink() cannot remove one - so
+# the store that must not be deleted is a file here, made read-only so that the
+# backend cannot write it.  Root ignores file modes, and Windows reports a $>
+# of 0 without having any root and does not keep its read-only attribute for the
+# Unix mode, so where either applies there is no read-only store to offer and
+# the directory above is all there is.
+SKIP: {
+	skip 'no read-only file to be had here', 1 if($> == 0);
+
+	my $store = File::Spec->catfile($dir, 'read-only');
+	open(my $fout, '>', $store) or die "$store: $!";
+	print $fout "chain: {}\n";
+	close($fout) or die "$store: $!";
+	chmod(0444, $store) or die "chmod $store: $!";
+	@RecordingLogger::calls = ();
+
+	my ($allowed, $error) = allow_from('10.10.10.3',
+		logger => RecordingLogger->new(),
+		config => { throttle => { file => $store, max_items => 2, interval => 90 } },
+	);
+
+	ok($allowed && !$error && -e $store && (-s $store > 0),
+		'a store that could not be written is served around, and left as it was');
 };
 
 subtest 'a store that can be used still refuses an abusive client' => sub {

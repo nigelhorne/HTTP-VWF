@@ -71,7 +71,16 @@ these modules:
 `cgi-bin/page.fcgi` in this distribution is a working page script to copy and
 adapt into a site's own `cgi-bin`; `templates/`, `conf/example.com` and
 `data/` beside it are the small site it serves, and the starting point for a
-new one.  A site's templates sit under a path built from the page's class name,
+new one.  `examples/basic-site/` is that site laid out on its own - the script,
+the configuration, the templates and the data - and its `README.md` documents
+it as an example to copy: where a site's configuration is read from, what
+`root_dir` is, and how to run it before it is deployed.  `examples/links.nigelhorne.com/`
+is the other kind of site: one page of its own, a `HTTP::VWF::Display` subclass
+whose answer is a redirect rather than a rendering of a template, and whose own
+script it keeps - the example documents the four changes to this one that it
+takes, and why.
+
+A site's templates sit under a path built from the page's class name,
 so the file to change when the page module is `HTTP::VWF::Display::index` is
 `templates/en/web/HTTP/VWF/Display/index.tmpl` - see [HTTP::VWF::Display](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3ADisplay)
 for the rest of the search order.  `CLAUDE.md` records how a request is handled
@@ -364,8 +373,14 @@ each checked before the next is started.
     From the site's own `cgi-bin`, the line the script's header gives:
 
     ```sh
-    LANG=en_GB root_dir=$(pwd)/.. ./page.fcgi page=index
+    LANG=en_GB root_dir=$(realpath $(pwd)/..) ./page.fcgi page=index
     ```
+
+    `root_dir` is the directory holding the site's `templates/`, and it has to be
+    absolute and free of `..`: the framework refuses a template path containing
+    `../`, as a guard against a `root_dir` that escapes the site. `realpath`
+    resolves the `..` the shell would otherwise leave in the value; run from the
+    site's own directory instead, and `root_dir=$(pwd)` is already resolved.
 
     The web server's configuration does not change, unless the site named its
     script `index.fcgi` where this distribution names it `page.fcgi`.

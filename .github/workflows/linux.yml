@@ -42,7 +42,10 @@ jobs:
           cpanm --skip-satisfied -qn String::Random Log::Dispatch::File Class::Simple Taint::Runtime
           cpanm --skip-satisfied -qn LWP::UserAgent::Cached LWP::Simple::WithCache Data::Serializer CGI::Carp B::Lint FCGI Template::Plugin::EnvHash HTML::SocialMedia Error IPC::System::Simple
           cpanm --skip-satisfied -qn Template::Plugin::JSON Log::Any::Adapter::Log4perl XML::Simple CHI DBD::CSV
-          cpanm --skip-satisfied -qn File::HomeDir Config::Abstraction Template::Filters Carp::Always Test::MockObject JSON::MaybeXS
+          # warnings::unused is here because the step below runs it against
+          # page.fcgi and against every module under lib/; without it those
+          # checks could only report their own absence.
+          cpanm --skip-satisfied -qn warnings::unused File::HomeDir Config::Abstraction Template::Filters Carp::Always Test::MockObject JSON::MaybeXS
           cpanm --skip-satisfied -qn Crypt::URandom File::pfopen Timer::Simple File::Slurp
           cpanm --skip-satisfied -qn Filesys::Df Sys::MemInfo Sys::Uptime System::Info Data::Validate::URI Params::Validate::Strict
           cpanm --skip-satisfied -qn Test::Most Readonly IP::Country::Fast CGI::Info~1.14
@@ -57,8 +60,49 @@ jobs:
           # t/page-render.t's work rather than this step's.
           prove -l t/
           cd cgi-bin
-          # Each lint check reports itself before the step gives up, so that a
-          # failing one cannot be masked by the diagnostic that follows it.
-          perl -c -MO=Lint ./page.fcgi '' || { cat /github/home/.cpanm/work/*/build.log; exit 1; }
-          perl -c -Mwarnings::unused ./page.fcgi '' || { cat /github/home/.cpanm/work/*/build.log; exit 1; }
-          cd ../t && prove get_params && root_dir=$(realpath $(pwd)/..) prove get_template_path
+          # The two lint checks are on what perl said, not on what perl's exit
+          # status was.  B::Lint and warnings::unused report what they find as
+          # warnings, and a warning leaves the status at 0: `perl -c -MO=Lint`
+          # answered 0 here while printing six findings, so a check that only
+          # looked at the status could never fail.  What a clean run prints is
+          # "syntax OK" and nothing else.
+          no_findings() {
+                  said=$("$@" 2>&1) || { printf '%s\n' "$said" >&2; return 1; }
+                  if found=$(printf '%s\n' "$said" | grep -v -e 'syntax OK$' -e '^$'); then
+                          printf '%s\n' "$said" >&2
+                          return 1
+                  fi
+                  printf '%s\n' "$said"
+          }
+          # undefined-subs is off: it reports `close STDERR` and
+          # `open(STDERR, ...)` as calls to subroutines called close and open
+          # that do not exist - six times over this script - so left on it
+          # would fail every run rather than catch anything.
+          no_findings perl -c -MO=Lint,no-undefined-subs ./page.fcgi ''
+          no_findings perl -c -Mwarnings::unused ./page.fcgi ''
+          cd ..
+          # Every module as well, not only the ones page.fcgi loads.  Its use
+          # lines compile a handful of them, but the page modules are required
+          # at run time, from the pages a configuration names, so a variable
+          # nothing uses in one of those was never compiled under
+          # warnings::unused and never reported.  Each module is compiled on its
+          # own, with lib/ in front so that a module's own use lines resolve to
+          # the files in this checkout.  A clean run prints only "syntax OK",
+          # which is not worth a line of log per module, so those are dropped and
+          # the count is reported instead.  A finding still reaches the log with
+          # the file and line in it - the helper writes it to stderr, which the
+          # redirect does not touch - and fails the step.
+          modules_checked=0
+          for module in $(find lib -name '*.pm' | sort); do
+                  no_findings perl -Ilib -c -Mwarnings::unused "$module" > /dev/null
+                  modules_checked=$((modules_checked + 1))
+          done
+          # A sweep that found nothing is not an all-clear: lib/ that has moved,
+          # or a find that matches nothing, would otherwise report the same
+          # success as a tree of clean modules.
+          if [ "$modules_checked" -eq 0 ]; then
+                  echo 'Nothing under lib/ to check with warnings::unused' >&2
+                  exit 1
+          fi
+          echo "warnings::unused: $modules_checked module(s) under lib/ have no unused variables"
+          cd t && prove get_params && root_dir=$(realpath $(pwd)/..) prove get_template_path

@@ -2,8 +2,8 @@ package HTTP::VWF::Allow;
 
 our $VERSION = '0.01';
 
-use HTTP::VWF::Blacklist;
-use HTTP::VWF::Utils;
+use HTTP::VWF::Blacklist ();
+use HTTP::VWF::Utils ();
 
 # Decide if we're going to allow this client to view the website
 # Usage:
@@ -11,9 +11,9 @@ use HTTP::VWF::Utils;
 
 use strict;
 use warnings;
-use Carp;
+use Carp qw(carp);
 use Error;
-use File::Spec;
+use File::Spec ();
 
 use constant DSHIELD_BASE => 'https://secure.dshield.org/api/sources/attacks/100/';
 

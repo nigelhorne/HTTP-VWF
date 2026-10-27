@@ -5,9 +5,9 @@ our $VERSION = '0.01';
 use strict;
 use warnings;
 
-use HTTP::VWF::Config;
-use Text::xSV::Slurp;
-use File::Slurp;	# For read_file
+use HTTP::VWF::Config ();
+use Text::xSV::Slurp qw(xsv_slurp);
+use File::Slurp qw(read_file);	# For read_file
 
 # Read in a small flat file of ! delimted records and make them available
 # as object methods so that they can be read from a page display routine or

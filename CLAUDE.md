@@ -43,6 +43,8 @@ perl t/blacklist.t
 perl t/allow_throttle.t
 perl t/config-format.t
 perl t/page-render.t
+perl t/example-front-doors.t
+perl t/links-example.t
 
 # These two have no .t suffix, so prove t/ skips them; CI runs them by name
 cd t && prove get_params && root_dir=$(realpath ..) prove get_template_path
@@ -58,6 +60,24 @@ Tests" step of the Linux workflow used to do by hand, and it renders a site it
 writes into a temporary directory, so the script is covered end to end without
 the checkout being touched.  It skips on Windows, where the script cannot run:
 the meta-data page wants `Filesys::Df` and the escape case reads `/etc/passwd`.
+
+`t/example-front-doors.t` reads each example's `index.html` and requires what it
+forwards to to exist: the script it names, and what it asks that script for - a
+page the site's `<pages>` allows and has a template or module to render, or, for a
+site whose page names its own parameter, a key in its database.  Every check is
+of the examples' own files, so it needs no server, no network and no
+configuration of the machine's own, and a new example is covered as soon as it
+has a front door.
+
+`t/links-example.t` is the run to that test's reading: it takes the request out
+of the links example's front door, runs the script the door names the way a web
+server runs it, and requires the code the door names to be answered out of the
+site's own database - plus the 404, the 400 and the 402 the site's page documents
+for a code it does not hold, for a request naming no code, and for a crawler, so
+that the answer to the door's code is an answer about the code.  The site is run
+in `HOME`, `TMPDIR` and `root_dir` directories of the test's own, and the fetch a
+code triggers is pointed at a closed port, so the test needs no network and writes
+nothing into the checkout.
 
 Dependencies for the suite: `Test::Most`, `Test::MockObject` and
 `Test::DescribeMe` are declared in `Makefile.PL`; `IP::Country::Fast` and `CGI::ACL` are needed for the GeoIP

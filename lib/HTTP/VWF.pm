@@ -6,8 +6,8 @@ package HTTP::VWF;
 use warnings;
 use strict;
 
-use Carp;
-use HTTP::VWF::Config;
+use Carp ();
+use HTTP::VWF::Config ();
 
 =encoding utf-8
 
@@ -89,7 +89,16 @@ The data access layer: CSV, XML and SQLite, through Database::Abstraction.
 C<cgi-bin/page.fcgi> in this distribution is a working page script to copy and
 adapt into a site's own C<cgi-bin>; C<templates/>, C<conf/example.com> and
 C<data/> beside it are the small site it serves, and the starting point for a
-new one.  A site's templates sit under a path built from the page's class name,
+new one.  F<examples/basic-site/> is that site laid out on its own - the script,
+the configuration, the templates and the data - and its F<README.md> documents
+it as an example to copy: where a site's configuration is read from, what
+C<root_dir> is, and how to run it before it is deployed.  F<examples/links.nigelhorne.com/>
+is the other kind of site: one page of its own, a C<HTTP::VWF::Display>
+subclass whose answer is a redirect rather than a rendering of a template, and
+whose own script it keeps - the example documents the four changes to this one
+that it takes, and why.
+
+A site's templates sit under a path built from the page's class name,
 so the file to change when the page module is C<HTTP::VWF::Display::index> is
 F<templates/en/web/HTTP/VWF/Display/index.tmpl> - see L<HTTP::VWF::Display>
 for the rest of the search order.  F<CLAUDE.md> records how a request is handled
@@ -471,7 +480,13 @@ and C<interval> as they were.  So does an access log named by C<vwflog>.
 
 From the site's own F<cgi-bin>, the line the script's header gives:
 
-	LANG=en_GB root_dir=$(pwd)/.. ./page.fcgi page=index
+	LANG=en_GB root_dir=$(realpath $(pwd)/..) ./page.fcgi page=index
+
+C<root_dir> is the directory holding the site's F<templates/>, and it has to be
+absolute and free of C<..>: the framework refuses a template path containing
+C<../>, as a guard against a C<root_dir> that escapes the site.  C<realpath>
+resolves the C<..> the shell would otherwise leave in the value; run from the
+site's own directory instead, and C<root_dir=$(pwd)> is already resolved.
 
 The web server's configuration does not change, unless the site named its script
 F<index.fcgi> where this distribution names it F<page.fcgi>.

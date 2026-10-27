@@ -13,13 +13,13 @@ package HTTP::VWF::Config;
 use warnings;
 use strict;
 
-use Carp;
-use Config::Abstraction;
-use CGI::Info;
-use Data::Dumper;
+use Carp ();
+use Config::Abstraction ();
+use CGI::Info ();
+use Data::Dumper ();
 use Error::Simple;
-use File::Spec;
-use Params::Get 0.13;
+use File::Spec ();
+use Params::Get 0.13 ();
 
 =encoding utf-8
 

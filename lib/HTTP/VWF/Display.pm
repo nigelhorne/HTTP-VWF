@@ -128,32 +128,32 @@ use warnings;
 use feature qw(signatures);
 no warnings qw(experimental::signatures);
 
-use Config::Abstraction;
-use CGI::Info 1.14;	# For is_ai()
-use Data::Dumper;
+use Config::Abstraction ();
+use CGI::Info 1.14 ();	# For is_ai()
+use Data::Dumper qw(Dumper);
 use Digest::MD5 qw(md5_hex);
 use Crypt::URandom qw(urandom);		# CSPRNG for CSRF tokens; rand() is not safe
-use Carp qw(croak carp);			# croak for fatal errors, carp for warnings
+use Carp qw(carp croak);			# croak for fatal errors, carp for warnings
 
 # Per-process fallback CSRF secret, generated once if no secret is configured.
 # Tokens are valid within a process lifetime but not across restarts.
 my $_csrf_fallback_secret;
 use Digest::SHA qw(sha256_hex);
-use File::Spec;
-use Object::Configure;
-use Params::Get;
-use Template::Filters;
-use Template::Plugin::EnvHash;
-use Template::Plugin::Math;
-use Template::Plugin::JSON;
-use HTML::SocialMedia;
-use HTTP::VWF::Blacklist;
-use HTTP::VWF::Config;
+use File::Spec ();
+use Object::Configure ();
+use Params::Get ();
+use Template::Filters ();
+use Template::Plugin::EnvHash ();
+use Template::Plugin::Math ();
+use Template::Plugin::JSON ();
+use HTML::SocialMedia ();
+use HTTP::VWF::Blacklist ();
+use HTTP::VWF::Config ();
 use HTTP::VWF::Utils qw(create_memory_cache);
 use Error;
-use File::pfopen;
-use Params::Get;
-use Scalar::Util;
+use File::pfopen ();
+use Params::Get ();
+use Scalar::Util ();
 
 our $sm;
 
