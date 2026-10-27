@@ -147,21 +147,26 @@ what runs.
     directory holding the site's `templates/`, as described.
 
     Both the plain form the document shows and the XML form the example uses are
-    read - `Config::Abstraction` takes either, and so does `Config::Auto`, which
-    is what [HTTP::VWF::Display::table](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3ADisplay%3A%3Atable) still reads its configuration with.  A
-    site whose configuration is already written the old way does not have to be
-    converted.  Note that the snippet in the document is a description rather than
-    a file to copy: it writes `root_dir /path` with a space but `memory_cache:`
-    and `disc_cache:` with colons, and a file mixing the two separators is liable
-    to have the explanations taken as the values, or to be refused outright as not
+    read - `Config::Abstraction` takes either, and so does `Config::Auto`, which a
+    site's own code may still be reading its configuration with.  A site whose
+    configuration is already written the old way does not have to be converted.
+    Note that the snippet in the document is a description rather than a file to
+    copy: it writes `root_dir /path` with a space but `memory_cache:` and
+    `disc_cache:` with colons, and a file mixing the two separators is liable to
+    have the explanations taken as the values, or to be refused outright as not
     being in a format that can be read.
 
     `t/config-format.t` holds this: it writes each form in a temporary directory
     and reads it back through each reader.
 
     The document's own FIXME - "Configuration files should be in .../conf, not
-    .../lib/conf" - is honoured: a site's `conf/` sits at the top of it, beside
-    `cgi-bin/`.
+    .../lib/conf" - is honoured: a site's `conf/` sits at the top of the search
+    order, beside `cgi-bin/`, and a setting in it is not overridden by a leftover
+    copy of the file in one of the `lib/conf` directories that predate it.  That is
+    where `page.fcgi` has always read the file, and [HTTP::VWF::Display::table](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3ADisplay%3A%3Atable)
+    reads it from there too: it used to look only in `~/lib/conf`, which left a
+    site declaring its `root_dir` in `conf/` and in `~/lib/conf` both, and free to
+    have the two disagree.
 
 - Debugging from the command line
 
@@ -262,6 +267,86 @@ what runs.
 
     Because the page's class path is part of the template path,
     `.../VWF/Display/` becomes `.../HTTP/VWF/Display/`.
+
+## Site Settings
+
+A site describes itself in the configuration file named after its domain, in
+its own `conf/` beside `cgi-bin/`.  These are the settings this
+distribution's own `cgi-bin/page.fcgi` reads; a site that adapts that script
+reads the same ones.
+
+Each has a default, and every default is the value that used to be written into
+the script - so a site that says nothing about a setting behaves exactly as it
+did before the setting existed.  `t/site-config.t` holds the defaults in place,
+so one cannot drift unnoticed.
+
+- `database_dir`
+
+    Where the site's databases are, as `Database::Abstraction` reads them, and what
+    a page is given as `databasedir`.  Default: `data/`, beside `cgi-bin/`.
+
+- `data_modules`
+
+    The data modules the site loads.  Each is loaded, constructed with `->new()`
+    and given to every page under the last part of its name, lower-cased, so that a
+    site's `Bands::Data::bands` arrives at the page as `bands`.  Default:
+    `HTTP::VWF::Data::index`, which is the handle [HTTP::VWF::Display::index](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3ADisplay%3A%3Aindex)
+    needs.  The access log is not one of these: `page.fcgi` builds its reader
+    itself from the `vwflog` setting, since it has to be told which log to read.
+
+- `supported_languages`
+
+    The languages the site offers, for example `en-gb fr`.  `CGI::Lingua` negotiates
+    within this list, so a language's templates are only reachable once it is listed.
+    Default: `en-gb`.
+
+- `allow_ips`
+
+    Addresses allowed through the geo-block, passed to `CGI::ACL`'s `allow_ip()`.
+    An address here is still refused if its reverse DNS says it is in a cloud range,
+    and [HTTP::VWF::Allow](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3AAllow) has checks of its own that this does not bypass.  Default:
+    `108.44.193.70` and `127.0.0.1`, the first being one site's own address, kept so
+    that the sites this script came from keep working.  A site with an address of its
+    own should set this.
+
+    It is not called `allowed_ips`, and cannot be: that is a `CGI::ACL`
+    constructor argument, and `CGI::ACL`'s `new()` runs the site's configuration
+    through `Object::Configure::configure()`, which would hand a key of that name to
+    it as a string where a hash is expected - breaking access control outright.
+
+- `rate_limit_trusted_ips`
+
+    Addresses exempt from rate limiting.  Default: `127.0.0.1` and `192.168.1.1` -
+    loopback, and one private address.
+
+- `pages`
+
+    The pages `?page=` may load.  Without it, every `Display/*.pm` shipped here may
+    be loaded except `captcha`.  See [HTTP::VWF::Display](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3ADisplay).
+
+- `blacklist_countries`
+
+    The countries refused access.  See [HTTP::VWF::Blacklist](https://metacpan.org/pod/HTTP%3A%3AVWF%3A%3ABlacklist).
+
+- `vwflog`
+
+    Where the access log is written, and read back by the meta-data page.  Default:
+    `vwf.log` in the directory `CGI::Info` reports as the log directory.
+
+A list-valued setting can be written as one string of values separated by commas
+or spaces, or as an element with one child per value, so that an XML
+configuration file can hold a list in whichever way reads better:
+
+```
+    <allow_ips>108.44.193.70, 127.0.0.1</allow_ips>
+
+    <allow_ips>
+            <ip>108.44.193.70</ip>
+            <ip>127.0.0.1</ip>
+    </allow_ips>
+```
+
+`conf/example.com` carries each of these settings as a commented example.
 
 ## Optional Prerequisites
 

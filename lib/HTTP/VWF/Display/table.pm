@@ -5,7 +5,7 @@ our $VERSION = '0.01';
 use strict;
 use warnings;
 
-use Config::Auto;
+use HTTP::VWF::Config;
 use Text::xSV::Slurp;
 use File::Slurp;	# For read_file
 
@@ -20,30 +20,27 @@ sub new {
 	my %args = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
 
 	my $class = ref($proto) || $proto;
-	my $path;
 
-	if($ENV{'DOCUMENT_ROOT'}) {
-		$path = File::Spec->catdir(
-			$ENV{'DOCUMENT_ROOT'},
-			File::Spec->updir(),
-			'lib',
-			'conf'
-		);
-	} else {
-		$path = File::Spec->catdir(
-			$ENV{'HOME'},
-			'lib',
-			'conf'
-		);
-	}
 	my $info = $args{info} || CGI::Info->new();
+
+	# Read the site's configuration the way page.fcgi does, so that a site has
+	# one configuration directory rather than one for the framework and another
+	# for its tables.  HTTP::VWF::Config looks in the site's own conf/, beside
+	# cgi-bin/, before it falls back to the lib/conf directories this module
+	# used to look in by itself.
+	my %config_args = (info => $info);
+	foreach my $key (qw(logger lingua config_directory config_file config)) {
+		$config_args{$key} = $args{$key} if(defined($args{$key}));
+	}
+
 	my $config;
 	eval {
-		$config = Config::Auto::parse($info->domain_name(), path => $path);
+		$config = HTTP::VWF::Config->new(\%config_args);
 	};
-	if($@) {
-		die "Configuration error: $@: $path/", $info->domain_name();
+	if($@ || !defined($config)) {
+		die "Configuration error: $@: ", $info->domain_name();
 	}
+
 	return bless {
 		_config => $config,
 		_info => $info,

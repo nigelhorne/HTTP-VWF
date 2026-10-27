@@ -79,3 +79,6 @@ typescript
 ^rate_limit/
 ^log/
 ^tmp/
+
+# Patch proposals for VWF, for review rather than for distribution
+^proposals/

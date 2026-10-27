@@ -4,15 +4,21 @@
 #
 # VWF's README describes a configuration file written as plain "key value"
 # lines, and its worked example is XML; F<conf/example.com> in this distribution
-# is XML.  Both forms are read by both readers - Config::Abstraction, which
-# page.fcgi builds its configuration with, and Config::Auto, which
-# HTTP::VWF::Display::table still reads its own with - so that a site whose
-# configuration was written the old way does not have to be converted.  This
-# test holds that: it writes each form and reads it back through each reader.
+# is XML.  Both forms are read by Config::Abstraction, which is how the framework
+# reads its configuration, and by Config::Auto, which is the reader VWF's own
+# HTTP::VWF::Display::table used before it was pointed at the site's F<conf/> -
+# so a site whose configuration was written the old way does not have to be
+# converted.  This test holds that: it writes each form and reads it back
+# through each reader.
 #
-# Everything here happens in a temporary directory.  Config::Abstraction is
-# given the directory to read rather than left to search, and the one place that
-# does need a home directory - Display::table - is given its own.
+# It also holds where a table looks for its configuration: the site's own
+# F<conf/>, beside F<cgi-bin/>, and then the F<lib/conf> directories that were
+# the only place it used to look.
+#
+# Everything here happens in temporary directories, including the site's, so
+# that nothing is read from the machine the test runs on.  The reader tests are
+# given the directory to read rather than left to search; the table subtests go
+# through the search, since that is what they are about.
 
 use strict;
 use warnings;
@@ -30,16 +36,19 @@ use Config::Auto;
 use HTTP::VWF::Display::table;
 
 {
-	# Display::table takes the site's domain from CGI::Info, which cannot work
-	# out a domain from a command line, so this stands in for it.
+	# Display::table takes the site's domain and script directory from CGI::Info,
+	# which cannot work either out from a command line, so this stands in for it.
 	package MockInfo;
 
 	sub new {
-		my ($class, $domain) = @_;
-		return bless { domain => $domain }, $class;
+		my ($class, %args) = @_;
+		return bless { %args }, $class;
 	}
 
-	sub domain_name { return $_[0]->{domain}; }
+	sub domain_name { return $_[0]->{domain_name}; }
+	sub script_dir { return $_[0]->{script_dir}; }
+	sub root_dir { return $_[0]->{root_dir}; }
+	sub lang { return 'en'; }
 }
 
 # A site called example.com, as the README's example and the shipped example
@@ -84,6 +93,8 @@ sub write_config {
 	my ($content, $dir) = @_;
 
 	$dir //= tempdir(CLEANUP => 1);
+	make_path($dir) unless(-d $dir);
+
 	my $file = File::Spec->catfile($dir, $DOMAIN);
 	open(my $out, '>', $file) or die "$file: $!";
 	print $out $content;
@@ -109,7 +120,8 @@ sub abstraction_config {
 	return $config;
 }
 
-# The way HTTP::VWF::Display::table reads it.
+# The reader VWF's Display::table used before it was pointed at the site's
+# conf/, and the one a site's own code may still be using.
 sub auto_config {
 	my ($dir) = @_;
 
@@ -184,34 +196,94 @@ subtest 'the two readers agree' => sub {
 	}
 };
 
-subtest 'Display::table reads a configuration written the old way' => sub {
-	# Display::table looks for its configuration through HOME/lib/conf, which is
-	# where VWF's own FIXME says the files had ended up, so that is where this
-	# one goes - not in the site's conf/ that page.fcgi reads.
-	my $home = tempdir(CLEANUP => 1);
-	my $root_dir = tempdir(CLEANUP => 1);
-	my $conf_dir = File::Spec->catdir($home, 'lib', 'conf');
-	make_path($conf_dir);
-
-	# The same plain form, with a root_dir that can be written to.
-	write_config("root_dir $root_dir\nmemory_cache /var/cache/example.com/memory\ndisc_cache /var/cache/example.com/disc\n", $conf_dir);
-
-	local $ENV{'HOME'} = $home;
-	delete local $ENV{'DOCUMENT_ROOT'};
-
-	my $table = HTTP::VWF::Display::table->new(info => MockInfo->new($DOMAIN));
-
-	# get_file_path() reads root_dir out of that configuration and looks for the
-	# table's own file beneath it, so finding that file shows the settings were
-	# understood rather than merely parsed.
+# Lay out a site the way one is installed: a cgi-bin directory for the page
+# script, a conf/ beside it, and a root_dir holding the templates and the
+# databases.  The table's own file is written under the last of those, so that
+# finding it shows root_dir was understood rather than merely parsed.
+sub make_site {
+	my $site = tempdir(CLEANUP => 1);
+	my $script_dir = File::Spec->catdir($site, 'cgi-bin');
+	my $root_dir = File::Spec->catdir($site, 'srv');
+	my $conf_dir = File::Spec->catdir($site, 'conf');
 	my $table_dir = File::Spec->catdir($root_dir, 'databases', 'HTTP', 'VWF', 'Display');
-	make_path($table_dir);
+
+	make_path($script_dir, $conf_dir, $table_dir);
+
 	my $table_file = File::Spec->catfile($table_dir, 'table');
 	open(my $data, '>', $table_file) or die "$table_file: $!";
 	print $data "name!email\na!a\@example.com\n";
 	close($data) or die "$table_file: $!";
 
-	is($table->get_file_path(), $table_file, 'the old-way configuration led it to the table file');
+	return {
+		conf_dir => $conf_dir,
+		script_dir => $script_dir,
+		table_file => $table_file,
+		# The plain form, with a root_dir that can be written to.
+		config => "root_dir $root_dir\nmemory_cache /var/cache/example.com/memory\ndisc_cache /var/cache/example.com/disc\n",
+	};
+}
+
+# What a site with this directory layout looks like to the framework.
+sub mock_info {
+	my ($site) = @_;
+
+	return MockInfo->new(
+		domain_name => $DOMAIN,
+		script_dir => $site->{script_dir},
+		root_dir => File::Spec->catdir($site->{script_dir}, File::Spec->updir()),
+	);
+}
+
+# get_file_path() dies when the file its configuration points at is not there,
+# which is how a wrong location gives itself away; a wrong one is reported here
+# as undef rather than killing the test.
+#
+# $home is the HOME to look under, and the assignment is made in here rather
+# than by the caller: a "local" set in a helper that has already returned is
+# undone, which would leave the machine's own HOME - and its lib/conf - in play.
+# Anyway the tests below each say what should be found; this makes sure that
+# nothing else can be what was found instead.
+sub table_file_found {
+	my ($site, $home) = @_;
+
+	local $ENV{'HOME'} = $home if(defined($home));
+	delete local $ENV{'DOCUMENT_ROOT'};
+	delete local $ENV{'CONFIG_DIR'};
+	delete local $ENV{'CONFIG_FILE'};
+
+	my $table = HTTP::VWF::Display::table->new(info => mock_info($site));
+	return eval { $table->get_file_path() };
+}
+
+subtest "Display::table reads the site's own conf/" => sub {
+	my $site = make_site();
+	write_config($site->{config}, $site->{conf_dir});
+
+	# A HOME with nothing of the site's in it.
+	is(table_file_found($site, tempdir(CLEANUP => 1)), $site->{table_file},
+		"root_dir came from the site's conf/");
+};
+
+subtest 'Display::table still reads a configuration in HOME/lib/conf' => sub {
+	my $site = make_site();
+	my $home = tempdir(CLEANUP => 1);
+	write_config($site->{config}, File::Spec->catdir($home, 'lib', 'conf'));
+
+	is(table_file_found($site, $home), $site->{table_file},
+		'the location it used to look in still works');
+};
+
+subtest "the site's conf/ is read before HOME/lib/conf" => sub {
+	my $site = make_site();
+	my $home = tempdir(CLEANUP => 1);
+
+	# A stale copy left where the old location was, pointing elsewhere: a site
+	# should not be at the mercy of a file it no longer writes.
+	write_config('root_dir ' . tempdir(CLEANUP => 1) . "\n", File::Spec->catdir($home, 'lib', 'conf'));
+	write_config($site->{config}, $site->{conf_dir});
+
+	is(table_file_found($site, $home), $site->{table_file},
+		"the site's own conf/ was the one used");
 };
 
 subtest "the README's snippet, which mixes the two separators" => sub {

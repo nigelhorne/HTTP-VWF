@@ -260,7 +260,7 @@ SKIP: {
 # =============================================================================
 
 subtest 'Rate Limiting with page.fcgi constants' => sub {
-	plan tests => 10;
+	plan tests => 12;
 	
 	# Extract constants from page.fcgi
 	my ($max_requests) = $full_code =~ /Readonly\s+my\s+\$MAX_REQUESTS\s*=>\s*(\d+)/;
@@ -294,12 +294,19 @@ subtest 'Rate Limiting with page.fcgi constants' => sub {
 	# Verify rate limit would be triggered
 	ok($count >= $max_requests, 'Rate limit threshold should be reached');
 	
-	# Test trusted IPs extraction
-	my ($trusted_ips) = $full_code =~ /Readonly\s+my\s+\@rate_limit_trusted_ips\s*=>\s*\((.*?)\);/s;
-	ok(defined $trusted_ips, 'Trusted IPs list found in code');
-	
+	# The addresses exempt from rate limiting are a site setting: this is the
+	# default, which is what a site that says nothing about them gets.
+	my ($trusted_ips) = $full_code =~ /Readonly\s+my\s+\@DEFAULT_RATE_LIMIT_TRUSTED_IPS\s*=>\s*qw\((.*?)\);/s;
+	ok(defined $trusted_ips, 'Default trusted IPs found in code');
+
 	# Verify localhost is trusted
-	like($trusted_ips, qr/'127\.0\.0\.1'/, 'Localhost should be in trusted IPs');
+	like($trusted_ips, qr/\b127\.0\.0\.1\b/, 'Localhost should be in trusted IPs');
+
+	# And that the limiter uses the site's list and not that default
+	like($full_code, qr/config_list\(\$config,\s*'rate_limit_trusted_ips'/,
+		"the site's trusted addresses are read from the configuration");
+	like($full_code, qr/grep \{ \$_ eq \$client_ip \} \@rate_limit_trusted_ips/,
+		'and they are what the check consults');
 	
 	# Test time window parsing (as done in page.fcgi)
 	my $parsed_time = $time_window;

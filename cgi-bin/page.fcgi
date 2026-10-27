@@ -118,18 +118,48 @@ Log::WarnDie->dispatcher($logger);
 # use HTTP::VWF::Display::editor;
 # use HTTP::VWF::Display::meta_data;
 
-use HTTP::VWF::Data::index;
-use HTTP::VWF::Data::vwf_log;
+# ── What a site declares, and what it gets if it declares nothing ───────────
+# The directory its databases are in, the data modules it loads, the languages
+# it offers and the addresses it allows or trusts are all site settings, read
+# from the domain's configuration file - see "Site Settings" in HTTP::VWF's
+# documentation.  What is below is what this script used to hardcode, so a site
+# that says nothing behaves exactly as it did before.  The settings are resolved
+# by site_setup() on the first request, because the configuration cannot be read
+# until the domain is known.
+Readonly my $DEFAULT_DATABASE_DIR => 'data';		# beside cgi-bin/
+Readonly my @DEFAULT_DATA_MODULES => qw(HTTP::VWF::Data::index);
+Readonly my @DEFAULT_SUPPORTED_LANGUAGES => qw(en-gb);
+# One site's own address, kept so that a site that came from this script and says
+# nothing keeps working; a site that wants a different list sets allow_ips.
+#
+# It is not called allowed_ips because that is a CGI::ACL constructor argument,
+# and CGI::ACL's new() runs the site's configuration through
+# Object::Configure::configure(), which hands a key of that name straight to it
+# as a string where a hash is expected, breaking the ACL outright.
+Readonly my @DEFAULT_ALLOW_IPS => qw(108.44.193.70 127.0.0.1);
+# Loopback and private addresses are exempt from rate limiting.
+Readonly my @DEFAULT_RATE_LIMIT_TRUSTED_IPS => qw(127.0.0.1 192.168.1.1);
 
-my $database_dir = "$script_dir/../data";
-Database::Abstraction::init({
-	cache => CHI->new(driver => 'Memory', datastore => {}),
-	cache_duration => '1 day',
-	directory => $database_dir,
-	logger => $logger
-});
+# The access log is the one data module this script builds itself, because which
+# log to read comes from the vwflog setting; its class is loaded here so that
+# doit() can construct it without a compile-time use.
+require_module('HTTP::VWF::Data::vwf_log');
+HTTP::VWF::Data::vwf_log->import() if(HTTP::VWF::Data::vwf_log->can('import'));
 
-my $index = HTTP::VWF::Data::index->new();
+# Resolved from the configuration by site_setup(): the directory holding the
+# site's databases, and the data handles it declared, by the name each is passed
+# to a page under (index, say).
+my $database_dir;
+my %data;
+
+# The lists from the configuration, likewise.
+my @supported_languages;
+my @rate_limit_trusted_ips;
+
+# 1 once site_setup() has run.  The configuration, the database directory, the
+# data handles and these lists last for the life of the process, not for one
+# request.
+my $site_ready;
 
 # $config is populated lazily inside doit() so that per-domain configuration
 # is loaded after the FCGI request has been accepted and the domain is known.
@@ -155,9 +185,6 @@ my %blacklisted_ip;
 
 # Per-IP request counter cache; created lazily on first request.
 my $rate_limit_cache;
-
-# Loopback and private addresses are trusted and exempt from rate limiting.
-Readonly my @rate_limit_trusted_ips => ('127.0.0.1', '192.168.1.1');
 
 # The CGI::ACL object is built on the first request, once $config is loaded,
 # because the country blacklist (HTTP::VWF::Blacklist) can come from the config file.
@@ -247,8 +274,7 @@ while($handling_request = ($request->Accept() >= 0)) {
 		$logger = Log::Abstraction->new(logger => sub { print join(', ', @{$_[0]->{'message'}}), "\n" }, level => 'debug');
 		Log::WarnDie->dispatcher($logger);
 		$info->set_logger($logger);
-		$index->set_logger($logger);
-		$vwf_log->set_logger($logger) if($vwf_log);
+		set_data_loggers($logger);
 
 		# Enable full stack traces in Error.pm for command-line debugging.
 		$Error::Debug = 1;
@@ -275,8 +301,7 @@ while($handling_request = ($request->Accept() >= 0)) {
 	# Propagate the current logger to all data-access objects that may emit
 	# log messages during this request.
 	$info->set_logger($logger);
-	$index->set_logger($logger);
-	$vwf_log->set_logger($logger) if($vwf_log);
+	set_data_loggers($logger);
 
 	# Dispatch the request.  Any unhandled Error.pm exception is caught here
 	# so a single bad request cannot kill the FCGI worker process.
@@ -349,19 +374,29 @@ sub doit
 		info => $info,
 		debug => $params{'debug'},
 		# A throwaway CGI::Lingua is used here only to satisfy HTTP::VWF::Config;
-		# the real, cache-backed instance is created further below.
-		lingua => CGI::Lingua->new({ supported => [ 'en-gb' ], info => $info, logger => $logger })
+		# the real, cache-backed instance is created further below.  It has to be
+		# given the default languages rather than the site's configured ones:
+		# this call is what reads the configuration, so the site's list is not
+		# known yet.
+		lingua => CGI::Lingua->new({ supported => [ @DEFAULT_SUPPORTED_LANGUAGES ], info => $info, logger => $logger })
 	});
+
+	# The site's own settings - its database directory, data modules, languages
+	# and trusted addresses - are read from that configuration, once per process.
+	site_setup($config);
 
 	# deny_cloud() blocks all known cloud provider address ranges (AWS, GCP,
 	# Azure) which generate almost no legitimate human traffic but are a
 	# common origin for automated scanning.  Geo-blocking is a blunt
-	# instrument but effective at reducing noise.
+	# instrument but effective at reducing noise.  It is also why an address a
+	# site allows here is still refused if its reverse DNS says it is in a cloud.
 	$acl ||= CGI::ACL->new()
 		->deny_cloud()
-		->deny_country(country => HTTP::VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->countries())
-		->allow_ip('108.44.193.70')
-		->allow_ip('127.0.0.1');
+		->deny_country(country => HTTP::VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->countries());
+
+	foreach my $ip (config_list($config, 'allow_ips', @DEFAULT_ALLOW_IPS)) {
+		$acl->allow_ip($ip);
+	}
 
 	@valid_pages = valid_pages($config) unless(@valid_pages);
 
@@ -474,9 +509,9 @@ sub doit
 	# Stores things for a month or longer
 	$lingua_cache ||= create_disc_cache(config => $config, logger => $logger, namespace => 'CGI::Lingua');
 
-	# Language negotiation
+	# Language negotiation, offering the languages this site offers
 	my $lingua = CGI::Lingua->new({
-		supported => [ 'en-gb' ],
+		supported => \@supported_languages,
 		cache => $lingua_cache,
 		info => $info,
 		logger => $logger,
@@ -776,13 +811,15 @@ sub doit
 	}
 
 	if(defined($display)) {
-		# Pass in handles to the databases
+		# Pass in handles to the databases: the site's own data handles, under
+		# the name each was declared with, and the access log, which the
+		# framework reads from the log it writes.
 		print $display->as_string({
 			cachedir => $cachedir,
 			config => $config,
 			databasedir => $database_dir,
 			database_dir => $database_dir,
-			index => $index,
+			%data,
 			vwf_log => $vwf_log,
 		});
 		vwflog($vwflog, $info, $lingua, $syslog, '', $log, $request_start);
@@ -887,6 +924,38 @@ sub send_error
 	return 1;
 }
 
+# A list-valued setting: what the configuration file says about it, or the
+# caller's defaults when it says nothing about it.  A list can be written as one
+# string of values separated by commas or spaces, which is what the plain form
+# of a configuration file gives, or as an element with one child per value,
+# which is what an XML file gives; both are read, so an XML file can hold a list
+# in whichever of the two ways reads better.  The values are returned as they
+# were written and in the order they were written, with repetitions dropped, and
+# a setting that is present but empty means no values at all - so that a site can
+# say "none" as well as saying nothing.
+sub config_list
+{
+	my ($config, $key, @defaults) = @_;
+
+	my $value = $config->{$key};
+	return @defaults unless(defined($value));
+
+	my @values;
+	if(ref($value) eq 'HASH') {
+		# One child per value; the names of the children are not used
+		foreach my $child (values %{$value}) {
+			push(@values, ref($child) eq 'ARRAY' ? @{$child} : $child);
+		}
+	} elsif(ref($value) eq 'ARRAY') {
+		@values = @{$value};
+	} else {
+		@values = split /[\s,]+/, $value;
+	}
+
+	my %seen;
+	return grep { defined($_) && length($_) && !$seen{$_}++ } @values;
+}
+
 # The pages that ?page= may load.  Sites can list them in the config file
 # (<pages>index, meta_data</pages>); otherwise every ../lib/HTTP/VWF/Display/*.pm
 # next to this script is allowed, except captcha, which only the rate limiter
@@ -895,13 +964,83 @@ sub valid_pages
 {
 	my $config = shift;
 
-	if(my $pages = $config->{'pages'}) {
-		$pages = [split /[\s,]+/, $pages] unless(ref($pages));
-		return grep { /\A\w+\z/ } @{$pages};
-	}
+	my @pages = config_list($config, 'pages');
+	return grep { /\A\w+\z/ } @pages if(@pages);
 
 	my $dir = File::Spec->catdir($script_dir, File::Spec->updir(), 'lib', 'HTTP', 'VWF', 'Display');
 	return sort(grep { $_ ne 'captcha' } map { basename($_, '.pm') } glob(File::Spec->catfile($dir, '*.pm')));
+}
+
+# Read the settings this site declares, once per process, and act on them: open
+# the database directory it names, load the data modules it names and give the
+# pages the languages and addresses it names.  Everything left unsaid keeps the
+# default it had when these values were written into this script.
+sub site_setup
+{
+	my $config = shift;
+
+	return if($site_ready);
+	$site_ready = 1;
+
+	# Where the site's own databases are.  Database::Abstraction reads them, and
+	# the pages are told the directory as databasedir and database_dir.
+	$database_dir = $config->{'database_dir'}
+		|| File::Spec->catdir($script_dir, File::Spec->updir(), $DEFAULT_DATABASE_DIR);
+	$logger->debug('Reading databases from ', $database_dir);
+
+	Database::Abstraction::init({
+		cache => CHI->new(driver => 'Memory', datastore => {}),
+		cache_duration => '1 day',
+		directory => $database_dir,
+		logger => $logger
+	});
+
+	# The languages the site offers.  CGI::Lingua negotiates within this list, so
+	# listing a language is what makes that language's templates reachable.
+	@supported_languages = config_list($config, 'supported_languages', @DEFAULT_SUPPORTED_LANGUAGES);
+
+	# Addresses exempt from rate limiting
+	@rate_limit_trusted_ips = config_list($config, 'rate_limit_trusted_ips', @DEFAULT_RATE_LIMIT_TRUSTED_IPS);
+
+	# The site's data modules.  Each is loaded, constructed with ->new() and
+	# given to every page under the last part of its name, lower-cased:
+	# HTTP::VWF::Data::index arrives at a page as index, and a site's own
+	# Bands::Data::bands as bands.
+	foreach my $module (config_list($config, 'data_modules', @DEFAULT_DATA_MODULES)) {
+		my $handle;
+		eval {
+			require_module($module);
+			$module->import() if($module->can('import'));
+			$handle = $module->new();
+		};
+		if(!defined($handle)) {
+			# A module the site named that cannot be loaded is reported and
+			# skipped rather than taking the site down: it is a setting now, so
+			# getting it wrong should not stop the pages that do not need it.
+			$logger->error("Can't load data module $module: $@");
+			next;
+		}
+
+		my $name = lc((split(/::/, $module))[-1]);
+		$handle->set_logger($logger) if($handle->can('set_logger'));
+		$data{$name} = $handle;
+		$logger->debug("Data module $module is available to pages as \$$name");
+	}
+
+	return 1;
+}
+
+# Give the current logger to every data handle.  This runs before each request,
+# since command-line mode replaces the logger; the handles themselves are made
+# once, by site_setup().
+sub set_data_loggers
+{
+	my $logger = shift;
+
+	foreach my $handle (values %data) {
+		$handle->set_logger($logger) if($handle->can('set_logger'));
+	}
+	$vwf_log->set_logger($logger) if($vwf_log);
 }
 
 # Convert a CHI-style duration ('60s', '2 minutes', '90') to whole seconds

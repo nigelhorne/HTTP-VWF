@@ -79,6 +79,10 @@ B<Directory Search Order:>
 5. $DOCUMENT_ROOT/../lib/conf
 6. $HOME/lib/conf
 
+An entry earlier in that list overrides every entry after it, so a setting in
+the site's own F<conf/>, beside F<cgi-bin/>, is not overridden by a leftover copy
+in one of the F<lib/conf> directories that predate it.
+
 B<Returns:> Blessed HTTP::VWF::Config object
 
 B<Throws:> Error::Simple on configuration errors
@@ -142,19 +146,37 @@ sub new
 			unless -d $ENV{'CONFIG_DIR'} && -r $ENV{'CONFIG_DIR'};
 		@config_dirs = ($ENV{'CONFIG_DIR'});
 	} else {
-		# Build the standard search path; caller's config_directory is prepended below
-		@config_dirs = (
-			File::Spec->catdir(
-				$info->script_dir(),
-				File::Spec->updir(),
-				File::Spec->updir(),
-				'conf'
-			), File::Spec->catdir(
-				$info->script_dir(),
-				File::Spec->updir(),
-				'conf'
-			)
-		);
+		# Build the standard search path, most specific first, as documented at
+		# the top of this file.  Config::Abstraction merges the directories in
+		# the order it is given them, each one overriding the one before it, so
+		# this list is reversed below before it is handed over: a search order is
+		# the opposite of a merge order.  The reversal is of the *directories*,
+		# and it happens before the per-directory variants are added below, or a
+		# language directory would end up under the unlocalised one it is meant
+		# to override.
+		@config_dirs = ();
+
+		# The caller's own directory takes precedence over every built-in one
+		if($params->{config_directory}) {
+			throw Error::Simple("config_directory must be a string") if ref($params->{config_directory});
+			throw Error::Simple("config_directory '$params->{config_directory}' does not exist")
+				unless -d $params->{config_directory};
+			push(@config_dirs, $params->{config_directory});
+		}
+
+		# Then the site's own conf/, beside cgi-bin/ - the directory page.fcgi
+		# reads - before the lib/conf directories that predate it.
+		push(@config_dirs, File::Spec->catdir(
+			$info->script_dir(),
+			File::Spec->updir(),
+			'conf'
+		));
+		push(@config_dirs, File::Spec->catdir(
+			$info->script_dir(),
+			File::Spec->updir(),
+			File::Spec->updir(),
+			'conf'
+		));
 
 		if($ENV{'DOCUMENT_ROOT'}) {
 			push(@config_dirs, File::Spec->catdir(
@@ -172,13 +194,7 @@ sub new
 			));
 		}
 
-		# Prepend the caller-supplied directory so it takes highest precedence
-		if($params->{config_directory}) {
-			throw Error::Simple("config_directory must be a string") if ref($params->{config_directory});
-			throw Error::Simple("config_directory '$params->{config_directory}' does not exist")
-				unless -d $params->{config_directory};
-			unshift @config_dirs, $params->{config_directory};
-		}
+		@config_dirs = reverse @config_dirs;
 	}
 
 	# Look for localised configurations

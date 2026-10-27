@@ -160,21 +160,26 @@ F<conf/example.com> in this distribution is that file, and C<root_dir> is the
 directory holding the site's F<templates/>, as described.
 
 Both the plain form the document shows and the XML form the example uses are
-read - C<Config::Abstraction> takes either, and so does C<Config::Auto>, which
-is what L<HTTP::VWF::Display::table> still reads its configuration with.  A
-site whose configuration is already written the old way does not have to be
-converted.  Note that the snippet in the document is a description rather than
-a file to copy: it writes C<root_dir /path> with a space but C<memory_cache:>
-and C<disc_cache:> with colons, and a file mixing the two separators is liable
-to have the explanations taken as the values, or to be refused outright as not
+read - C<Config::Abstraction> takes either, and so does C<Config::Auto>, which a
+site's own code may still be reading its configuration with.  A site whose
+configuration is already written the old way does not have to be converted.
+Note that the snippet in the document is a description rather than a file to
+copy: it writes C<root_dir /path> with a space but C<memory_cache:> and
+C<disc_cache:> with colons, and a file mixing the two separators is liable to
+have the explanations taken as the values, or to be refused outright as not
 being in a format that can be read.
 
 F<t/config-format.t> holds this: it writes each form in a temporary directory
 and reads it back through each reader.
 
 The document's own FIXME - "Configuration files should be in .../conf, not
-.../lib/conf" - is honoured: a site's F<conf/> sits at the top of it, beside
-F<cgi-bin/>.
+.../lib/conf" - is honoured: a site's F<conf/> sits at the top of the search
+order, beside F<cgi-bin/>, and a setting in it is not overridden by a leftover
+copy of the file in one of the F<lib/conf> directories that predate it.  That is
+where C<page.fcgi> has always read the file, and L<HTTP::VWF::Display::table>
+reads it from there too: it used to look only in F<~/lib/conf>, which left a
+site declaring its C<root_dir> in F<conf/> and in F<~/lib/conf> both, and free to
+have the two disagree.
 
 =item Debugging from the command line
 
@@ -285,6 +290,88 @@ Because the page's class path is part of the template path,
 F<.../VWF/Display/> becomes F<.../HTTP/VWF/Display/>.
 
 =back
+
+=head1 Site settings
+
+A site describes itself in the configuration file named after its domain, in
+its own F<conf/> beside F<cgi-bin/>.  These are the settings this
+distribution's own F<cgi-bin/page.fcgi> reads; a site that adapts that script
+reads the same ones.
+
+Each has a default, and every default is the value that used to be written into
+the script - so a site that says nothing about a setting behaves exactly as it
+did before the setting existed.  F<t/site-config.t> holds the defaults in place,
+so one cannot drift unnoticed.
+
+=over 4
+
+=item C<database_dir>
+
+Where the site's databases are, as C<Database::Abstraction> reads them, and what
+a page is given as C<databasedir>.  Default: F<data/>, beside F<cgi-bin/>.
+
+=item C<data_modules>
+
+The data modules the site loads.  Each is loaded, constructed with C<< ->new() >>
+and given to every page under the last part of its name, lower-cased, so that a
+site's C<Bands::Data::bands> arrives at the page as C<bands>.  Default:
+C<HTTP::VWF::Data::index>, which is the handle L<HTTP::VWF::Display::index>
+needs.  The access log is not one of these: C<page.fcgi> builds its reader
+itself from the C<vwflog> setting, since it has to be told which log to read.
+
+=item C<supported_languages>
+
+The languages the site offers, for example C<en-gb fr>.  C<CGI::Lingua> negotiates
+within this list, so a language's templates are only reachable once it is listed.
+Default: C<en-gb>.
+
+=item C<allow_ips>
+
+Addresses allowed through the geo-block, passed to C<CGI::ACL>'s C<allow_ip()>.
+An address here is still refused if its reverse DNS says it is in a cloud range,
+and L<HTTP::VWF::Allow> has checks of its own that this does not bypass.  Default:
+C<108.44.193.70> and C<127.0.0.1>, the first being one site's own address, kept so
+that the sites this script came from keep working.  A site with an address of its
+own should set this.
+
+It is not called C<allowed_ips>, and cannot be: that is a C<CGI::ACL>
+constructor argument, and C<CGI::ACL>'s C<new()> runs the site's configuration
+through C<Object::Configure::configure()>, which would hand a key of that name to
+it as a string where a hash is expected - breaking access control outright.
+
+=item C<rate_limit_trusted_ips>
+
+Addresses exempt from rate limiting.  Default: C<127.0.0.1> and C<192.168.1.1> -
+loopback, and one private address.
+
+=item C<pages>
+
+The pages C<?page=> may load.  Without it, every C<Display/*.pm> shipped here may
+be loaded except C<captcha>.  See L<HTTP::VWF::Display>.
+
+=item C<blacklist_countries>
+
+The countries refused access.  See L<HTTP::VWF::Blacklist>.
+
+=item C<vwflog>
+
+Where the access log is written, and read back by the meta-data page.  Default:
+F<vwf.log> in the directory C<CGI::Info> reports as the log directory.
+
+=back
+
+A list-valued setting can be written as one string of values separated by commas
+or spaces, or as an element with one child per value, so that an XML
+configuration file can hold a list in whichever way reads better:
+
+	<allow_ips>108.44.193.70, 127.0.0.1</allow_ips>
+
+	<allow_ips>
+		<ip>108.44.193.70</ip>
+		<ip>127.0.0.1</ip>
+	</allow_ips>
+
+F<conf/example.com> carries each of these settings as a commented example.
 
 =head1 Optional prerequisites
 

@@ -63,7 +63,13 @@ Tests must not depend on files outside the repository.  `HTTP::VWF::Display`
 falls back to `~/lib/conf` when it can't find a config directory, so a test can
 pass locally and fail in CI.  Point `CONFIG_DIR` at a temporary directory
 holding a `default` config file instead (see `t/captcha_tests.t`).  Running the
-tests with `HOME` set to an empty directory reproduces CI.  Hand-written
+tests with `HOME` set to an empty directory reproduces CI.  When a test needs a
+particular `HOME` or a `conf/` beside a `cgi-bin/`, set it in the sub that does
+the lookup and not in a helper that returns first: a `local` is undone when its
+sub returns, which leaves the machine's own `HOME` - and its `lib/conf` - in play
+and lets a test pass for the wrong reason.  `t/config-format.t` does it that way,
+and both it and the table it tests would otherwise have passed against a tree
+that never read the file at all.  Hand-written
 `CGI::Info` mocks (e.g. `MockInfo` in `t/get_template_path`) must define every
 `is_*` method that `HTTP::VWF::Display::_types()` calls.
 
@@ -138,9 +144,9 @@ templates)
 Domain config lives in `conf/<domain>/` as XML files, or a single
 `conf/<domain>`; `conf/example.com` is a complete example.
 
-Both that XML form and VWF's older plain `key value` form are read, by both
-`Config::Abstraction` (which `page.fcgi` builds its config with) and
-`Config::Auto` (which `HTTP::VWF::Display::table` still reads its own with), so
+Both that XML form and VWF's older plain `key value` form are read, by
+`Config::Abstraction` (which `page.fcgi` and `HTTP::VWF::Config` build their
+config with) and by `Config::Auto` (which a site's own code may still use), so
 an old-style config does not have to be converted.  `t/config-format.t` writes
 each form and reads it back through each reader to hold that; note that the
 snippet in VWF's README mixes the two separators, and that mixed form is read by
@@ -156,6 +162,20 @@ The country blacklist lives in `HTTP::VWF::Blacklist`
 Only pages on an allow-list can be loaded: `pages` in the config (e.g.
 `<pages>index, meta_data</pages>`), or by default every
 `lib/HTTP/VWF/Display/*.pm` beside `page.fcgi` except `captcha`.
+
+The site's own settings are read from the same file by `page.fcgi`, each
+defaulting to the value it used to have written into the script, so a site that
+says nothing behaves as it did: `database_dir` (default `data/`, beside
+`cgi-bin/`), `data_modules`, `supported_languages`, `allow_ips` and
+`rate_limit_trusted_ips`.  A list can be one comma- or space-separated string, or
+an element with one child per value; `config_list()` in `page.fcgi` reads both
+forms, and `t/site-config.t` holds the defaults in place.  One name to be careful
+with: the allowed addresses are `allow_ips`, **not** `allowed_ips`, because
+`CGI::ACL->new()` runs the site's configuration through
+`Object::Configure::configure()` and `allowed_ips` is its own hashref constructor
+argument - a string from a config file reaches it as that argument and breaks the
+ACL.  Anything else added at the top level of the config faces the same hazard:
+check that no class in the path declares a constructor parameter of that name.
 
 The CSRF token requires a secret to be set in config:
 
@@ -268,10 +288,22 @@ added to one side and not the other is reported rather than silently skipped.
 `lib/HTTP/VWF.pm` is deliberately outside the comparison: it is this
 distribution's own front door and VWF has no `VWF.pm` to compare it against.
 
-Two modules here deliberately differ from VWF's, and the sync test reports them
-until the same change is made there: `lib/HTTP/VWF/Display/meta_data.pm` and
-`lib/HTTP/VWF/Allow.pm` load their optional module at run time and carry on
-without it, so that a platform which cannot install it still works.
+Four modules here deliberately differ from VWF's, and the sync test reports them
+until the same change is made there:
+
+- `lib/HTTP/VWF/Display/meta_data.pm` and `lib/HTTP/VWF/Allow.pm` load their
+  optional module at run time and carry on without it, so that a platform which
+  cannot install it still works;
+- `lib/HTTP/VWF/Display/table.pm` and `lib/HTTP/VWF/Config.pm` read the site's
+  own `conf/`, beside `cgi-bin/`, instead of only `~/lib/conf`, and give that
+  directory the precedence the search order claims for it - so a site keeps one
+  configuration location rather than two.
+
+The patches that reconcile the two trees are in `proposals/`, where proposals
+for VWF are kept - each one carries the diff to apply, and the way to check it is
+to apply it to a clone and run the sync test against that clone with `VWF_HOME`.
+Applying all of them to a clone of `../vwf` makes the sync test pass outright.
+`proposals/` is excluded from the distribution by `MANIFEST.SKIP`.
 
 Sites that still carry their own renamed copy use the same kind of test - see
 `Geo::Coder::Free`'s `t/vwf-sync.t`.
