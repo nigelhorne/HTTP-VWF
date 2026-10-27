@@ -411,6 +411,19 @@ sub _find_config_dir
 		}
 	}
 
+	# Then the server's own directory for this site, one directory per site, for a
+	# host that keeps their configurations together: the same lookup
+	# HTTP::VWF::Config makes, so that a site it is configured from is configured
+	# here too.  A page script passes the root it used, in server_directory.
+	if(!-d $config_dir) {
+		if(my $server_dir = HTTP::VWF::Config->site_directory(
+			directory => $args->{server_directory},
+			sitename => $info->domain_name()
+		)) {
+			$config_dir = $server_dir;
+		}
+	}
+
 	if(!-d $config_dir) {
 		if($args->{config_directory}) {
 			return $args->{config_directory};

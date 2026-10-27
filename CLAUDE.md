@@ -42,6 +42,7 @@ perl t/security_tests.t
 perl t/blacklist.t
 perl t/allow_throttle.t
 perl t/config-format.t
+perl t/page-render.t
 
 # These two have no .t suffix, so prove t/ skips them; CI runs them by name
 cd t && prove get_params && root_dir=$(realpath ..) prove get_template_path
@@ -49,6 +50,14 @@ cd t && prove get_params && root_dir=$(realpath ..) prove get_template_path
 # Author-only: diff these modules against the VWF checkout (see below)
 AUTHOR_TESTING=1 prove -l t/vwf-sync.t
 ```
+
+`t/page-render.t` runs `page.fcgi` as a program, the way a web server runs it,
+for three requests - the site's own page, the meta-data page, and a path outside
+the site - and reads back the access log the script keeps.  It is what the "Run
+Tests" step of the Linux workflow used to do by hand, and it renders a site it
+writes into a temporary directory, so the script is covered end to end without
+the checkout being touched.  It skips on Windows, where the script cannot run:
+the meta-data page wants `Filesys::Df` and the escape case reads `/etc/passwd`.
 
 Dependencies for the suite: `Test::Most`, `Test::MockObject` and
 `Test::DescribeMe` are declared in `Makefile.PL`; `IP::Country::Fast` and `CGI::ACL` are needed for the GeoIP
@@ -193,7 +202,16 @@ A `Host` header that carries a port is looked up under `<domain>:<port>`, and
 the bare domain's file is read underneath it, so per-port copies are not
 needed: the ones these sites had, and `bandsman.co.uk:80` and
 `concert-bands.com:443` in `~/lib/conf`, have been removed.  The other sites
-still keep theirs in `~/lib/conf`.  When neither location has a domain config,
+still keep theirs in `~/lib/conf`.  Below both of those sits the directory the
+server keeps the configuration of the sites it serves in:
+`/usr/lib/vwf/<sitename>`, one directory per site, named after the site (the
+domain, with any port dropped), read when the site has no config of its own.  A
+server with another root says so in `HTTP::VWF->new(directory => ...)` - which
+is what builds a site's configuration - and the `<sitename>` comes from the
+request, so it is used only when it is a plain name: a `Host` of `../../etc`
+contributes no directory rather than one outside the root.  `t/server-conf-dir.t`
+covers the default, the parameter, the port, that precedence and that last
+point.  When neither location has a domain config,
 `Config::Abstraction` falls back to `local.yaml` there instead of failing, so a
 missing file is not reported - inspect `config_path` when a site looks wrong
 rather than assuming the domain file was read.
@@ -227,6 +245,14 @@ disable CSRF entirely, set `<enable>0</enable>` inside `<csrf>`.
 Two-tier: in-process memory cache (CHI::Driver::Memory) and optional
 disc/Memcached cache.  Cache keys incorporate language, region, device type, and
 page parameters to serve correct variants.
+
+A file-based disc cache is rooted only at a cache directory that was asked for:
+the `disc_cache` setting's `root_dir`, or the `root_dir` passed to
+`create_disc_cache()`.  The site's own `root_dir` is not a cache directory and is
+never used as one — with nothing else named, CHI's default under the system
+temporary directory is used — and a named directory that does not exist yet is
+created (`HTTP::VWF::Utils::_configure_file_based`).  This is what keeps
+`CGI+3a+3aLingua`, one directory per cache namespace, out of the served tree.
 
 ### Security Model
 

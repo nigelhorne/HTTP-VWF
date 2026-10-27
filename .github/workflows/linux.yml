@@ -36,7 +36,9 @@ jobs:
         run: |
           cpanm -iqn File::Spec ExtUtils::MakeMaker XML::LibXML
           cpanm -iqfn CGI::IDS Data::Throttler CGI::ACL
-          cpanm --skip-satisfied -qn Database::Abstraction Log::WarnDie CGI::Lingua FCGI::Buffer || cat /github/home/.cpanm/work/*/build.log
+          # A failed install fails the step: the build log explains it, and the
+          # cat's own success must not swallow it.
+          cpanm --skip-satisfied -qn Database::Abstraction Log::WarnDie CGI::Lingua FCGI::Buffer || { cat /github/home/.cpanm/work/*/build.log; exit 1; }
           cpanm --skip-satisfied -qn String::Random Log::Dispatch::File Class::Simple Taint::Runtime
           cpanm --skip-satisfied -qn LWP::UserAgent::Cached LWP::Simple::WithCache Data::Serializer CGI::Carp B::Lint FCGI Template::Plugin::EnvHash HTML::SocialMedia Error IPC::System::Simple
           cpanm --skip-satisfied -qn Template::Plugin::JSON Log::Any::Adapter::Log4perl XML::Simple CHI DBD::CSV
@@ -46,12 +48,17 @@ jobs:
           cpanm --skip-satisfied -qn Test::Most Readonly IP::Country::Fast CGI::Info~1.14
       - name: Run Tests
         run: |
-          prove -l t/security_tests.t
-          root_dir=$(realpath $(pwd)) prove -l t/captcha_tests.t
-          prove -l t/blacklist.t t/display_tests.t t/display_throttle.t
-          cd cgi-bin && mkdir -p ../data && perl -c -MO=Lint ./page.fcgi '' && perl -c -Mwarnings::unused ./page.fcgi '' || cat /github/home/.cpanm/work/*/build.log
-          root_dir=$(realpath $(pwd)/..) perl page.fcgi page=index
-          root_dir=$(realpath $(pwd)/..) perl page.fcgi page=meta_data
-          root_dir=$(realpath $(pwd)/..) perl page.fcgi page=/etc/passwd
+          # The whole suite, so a test added later is covered here without
+          # anyone having to remember to list it.  No root_dir is set: it would
+          # override the settings in a configuration file, and t/config-format.t
+          # checks which file a site's settings came from.
+          #
+          # Rendering page.fcgi, and reading the access log it writes, is
+          # t/page-render.t's work rather than this step's.
+          prove -l t/
+          cd cgi-bin
+          # Each lint check reports itself before the step gives up, so that a
+          # failing one cannot be masked by the diagnostic that follows it.
+          perl -c -MO=Lint ./page.fcgi '' || { cat /github/home/.cpanm/work/*/build.log; exit 1; }
+          perl -c -Mwarnings::unused ./page.fcgi '' || { cat /github/home/.cpanm/work/*/build.log; exit 1; }
           cd ../t && prove get_params && root_dir=$(realpath $(pwd)/..) prove get_template_path
-          cat /tmp/vwf.log

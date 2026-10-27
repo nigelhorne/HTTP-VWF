@@ -3,6 +3,12 @@ package HTTP::VWF;
 # HTTP::VWF is licensed under GPL2.0 for personal use only
 # njh@nigelhorne.com
 
+use warnings;
+use strict;
+
+use Carp;
+use HTTP::VWF::Config;
+
 =encoding utf-8
 
 =head1 NAME
@@ -40,9 +46,10 @@ building responsive websites that adapt to the client's language, to the kind
 of client (web, mobile, robot, search engine or AI crawler) and to whichever
 database back end the site uses.
 
-This module is the distribution's front door: it holds the version number and
-this overview.  There is no class here to use.  Working the framework does
-these modules:
+This module is the distribution's front door: it holds the version number, this
+overview, and the one thing a site builds by hand - L</new>, the site's
+configuration and the directory the server keeps it in.  Working the framework
+does these modules:
 
 =over 4
 
@@ -91,6 +98,80 @@ once it arrives.
 A site that used to carry a renamed copy of VWF of its own deletes that copy,
 installs this distribution, renames C<VWF::> to C<HTTP::VWF::> in its own code,
 and moves its templates from C<.../VWF/Display/> to C<.../HTTP/VWF/Display/>.
+
+=head1 SUBROUTINES/METHODS
+
+=head2 new
+
+The configuration of a site, and the directory the server keeps it in.
+
+B<Parameters:>
+
+=over 4
+
+=item * C<directory> - The directory the server keeps the configuration of the
+sites it serves in: one directory per site, named after the site, so that a site
+reached as F<example.com> is configured from F</usr/lib/vwf/example.com>.  Any
+other root can be named here - F</etc/vwf>, F</usr/local/etc/vwf> - and the
+default is F</usr/lib/vwf>.  Optional.
+
+=item * C<info>, C<logger>, C<config_directory>, C<config_file>, C<config> -
+handed to L<HTTP::VWF::Config>, which describes them.
+
+=back
+
+=cut
+
+sub new
+{
+	my ($proto, @args) = @_;
+	my %params = (ref($args[0]) eq 'HASH') ? %{$args[0]} : @args;
+
+	my $class = ref($proto) || $proto;
+
+	if(defined($params{'directory'}) && ref($params{'directory'})) {
+		Carp::croak('directory must be a string');
+	}
+
+	return bless {
+		directory => $params{'directory'},
+		params => \%params,
+	}, $class;
+}
+
+=head2 directory
+
+The directory the server keeps this site's configuration in: what C<new()> was
+given, or F</usr/lib/vwf>.  L<HTTP::VWF::Config> adds the site's own name to it.
+
+=cut
+
+sub directory
+{
+	my $self = shift;
+
+	return $self->{'directory'} // $HTTP::VWF::Config::DEFAULT_DIRECTORY;
+}
+
+=head2 config
+
+The site's configuration, read once and kept: a site that has no F<conf/> of its
+own beside F<cgi-bin/> is configured from the server's directory for it, and
+L<HTTP::VWF::Config> describes the rest of the search.
+
+=cut
+
+sub config
+{
+	my $self = shift;
+
+	return $self->{'config'} ||= HTTP::VWF::Config->new({
+		%{$self->{'params'}},
+		directory => $self->directory(),
+	});
+}
+
+1;
 
 =head1 Keeping in step with VWF
 
@@ -158,6 +239,13 @@ Template Toolkit file, and an HTML response says C<charset=UTF-8> as well.
 /usr/lib/conf/example.com", and "root_dir /full/path/to/template directory".
 F<conf/example.com> in this distribution is that file, and C<root_dir> is the
 directory holding the site's F<templates/>, as described.
+
+F</usr/lib/conf/example.com> is one directory for every site the host serves,
+which is what this distribution changed: the server's own directory for a site
+is F</usr/lib/vwf/example.com>, one directory per site, named after it.  A site
+that keeps no F<conf/> of its own is configured from there, and a server that
+keeps its per-site directories somewhere else says so in
+C<< HTTP::VWF->new(directory => '/some/where') >> - see L</new>.
 
 Both the plain form the document shows and the XML form the example uses are
 read - C<Config::Abstraction> takes either, and it is the only reader the
@@ -333,6 +421,14 @@ F<cgi-bin/>.  The file itself needs no editing: the plain C<key value> form the
 README shows and the XML form its example uses are both read from either
 location, by C<Config::Abstraction>.  F<conf/example.com> in this distribution
 is an example to copy.
+
+A site that does not own the machine it runs on - one of many virtual hosts on a
+server, whose F<conf/> is the server's to write - can leave the file where the
+server keeps the configuration of the sites it serves, in
+F</usr/lib/vwf/E<lt>sitenameE<gt>>, or under whichever root that server names with
+C<< HTTP::VWF->new(directory => ...) >>.  That directory is read below the site's
+own F<conf/>, and only from a name the request cannot talk its way out of, so
+what the site writes for itself still wins.
 
 The site's F<conf/> is searched first, so a setting in it cannot be overridden
 by an old copy left in F<~/lib/conf>.  Delete that copy anyway: VWF's own

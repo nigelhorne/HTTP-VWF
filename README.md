@@ -146,6 +146,13 @@ what runs.
     `conf/example.com` in this distribution is that file, and `root_dir` is the
     directory holding the site's `templates/`, as described.
 
+    `/usr/lib/conf/example.com` is one directory for every site the host serves,
+    which is what this distribution changed: the server's own directory for a
+    site is `/usr/lib/vwf/example.com`, one directory per site, named after it.
+    A site that keeps no `conf/` of its own is configured from there, and a
+    server that keeps its per-site directories somewhere else says so in
+    `HTTP::VWF->new(directory => '/some/where')`.
+
     Both the plain form the document shows and the XML form the example uses are
     read - `Config::Abstraction` takes either, and it is the only reader the
     framework uses.  A site whose configuration is already written the old way
@@ -310,6 +317,13 @@ each checked before the next is started.
     shows and the XML form its example uses are both read from either location,
     by `Config::Abstraction`.  `conf/example.com` in this distribution is an
     example to copy.
+
+    A site that does not own the machine it runs on - one of many virtual hosts
+    on a server, whose `conf/` is the server's to write - can leave the file
+    where the server keeps the configuration of the sites it serves, in
+    `/usr/lib/vwf/<sitename>`, or under whichever root that server names with
+    `HTTP::VWF->new(directory => ...)`.  That directory is read below the site's
+    own `conf/`, so what the site writes for itself still wins.
 
     The site's `conf/` is searched first, so a setting in it cannot be
     overridden by an old copy left in `~/lib/conf`.  Delete that copy anyway:

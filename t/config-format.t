@@ -199,6 +199,9 @@ sub table_file_found {
 	delete local $ENV{'DOCUMENT_ROOT'};
 	delete local $ENV{'CONFIG_DIR'};
 	delete local $ENV{'CONFIG_FILE'};
+	# The environment overrides every setting a configuration file holds, and
+	# these subtests are about which file the settings were read from.
+	delete local $ENV{'root_dir'};
 
 	my $table = HTTP::VWF::Display::table->new(info => mock_info($site));
 	return eval { $table->get_file_path() };

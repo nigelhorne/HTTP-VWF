@@ -35,18 +35,27 @@ Version 0.01
 
 our $VERSION = '0.01';
 
+# Where a hosting server keeps the configuration of the sites it serves: one
+# directory per site, named after the site, so that F</usr/lib/vwf/example.com>
+# holds F<example.com>'s.  A server that keeps them elsewhere says so in
+# C<< HTTP::VWF->new(directory => '/some/where') >>, or with the C<directory>
+# parameter below.
+our $DEFAULT_DIRECTORY = '/usr/lib/vwf';
+
 =head1 SUBROUTINES/METHODS
 
 =head2 new
 
 Creates a new HTTP::VWF::Config instance with hierarchical configuration loading.
 
-Takes four optional arguments:
+Takes these optional arguments:
 	info (CGI::Info object)
 	logger
 	config_directory - used when the configuration directory can't be worked out
 	config_file - name of the configuration file - otherwise determined dynamically
 	config (ref to hash of values to override in the config file
+	directory - where the server keeps the configuration of the sites it serves,
+		one directory per site, F</usr/lib/vwf> unless told otherwise
 
 Values in the file are overridden by what's in the environment
 
@@ -64,6 +73,10 @@ B<Parameters:>
 
 =item * C<config> - Hash ref of override values (optional)
 
+=item * C<directory> - The directory the server keeps the configuration of its
+sites in, one directory per site, named after the site (optional, default
+F</usr/lib/vwf>)
+
 =back
 
 B<Configuration Resolution Order:>
@@ -78,10 +91,27 @@ B<Directory Search Order:>
 4. ../../conf relative to script
 5. $DOCUMENT_ROOT/../lib/conf
 6. $HOME/lib/conf
+7. $directory/$sitename - the server's own directory for this site
 
 An entry earlier in that list overrides every entry after it, so a setting in
 the site's own F<conf/>, beside F<cgi-bin/>, is not overridden by a leftover copy
-in one of the F<lib/conf> directories that predate it.
+in one of the F<lib/conf> directories that predate it, nor by one the server
+keeps for the site.
+
+B<The server's directory for a site.>  A host serving many sites cannot keep
+them all in one F<conf/>: each site has a configuration of its own, and none of
+them owns the server's.  C<directory> is the root they live under -
+F</usr/lib/vwf> unless given - and C<$sitename> is the site's name, the domain
+the request was made under, so F</usr/lib/vwf/example.com> is C<example.com>'s.
+Inside it the same file names are looked for as in every other directory.  A
+F<Host> header carrying a port contributes the bare domain: F<example.com:8080>
+is looked up under F<example.com>.
+
+The name comes from the request, so it is used only when it is a plain name: a
+C<Host> of F<../../etc> contributes no directory at all, rather than one outside
+the root.  A server that has not written a site's configuration yet is not an
+error - there is simply nothing to read there, as with any other directory in the
+search.
 
 A F<Host> header that carries a port makes the domain name F<example.com:443>,
 and the file for the bare domain is read underneath the port-specific one, so a
@@ -108,6 +138,7 @@ B<Throws:> Error::Simple on configuration errors
                      logger : LOGGER;
                      config_directory : STRING;
                      config_file : STRING;
+                     directory : STRING;
                      config : HASH ⟩⟩
 
     Init : ConfigArgs → ConfigState
@@ -147,6 +178,14 @@ sub new
 
 	my $class = ref($proto) || $proto;
 	my $info = $params->{info} || CGI::Info->new();
+
+	# The root the server keeps its per-site configuration directories under.
+	# A directory that is not there contributes no files, like the other
+	# built-in locations, so a server that has not created it yet is not an
+	# error: there is simply nothing to read from it.
+	my $directory = $params->{'directory'};
+	throw Error::Simple('directory must be a string') if(defined($directory) && ref($directory));
+	$directory = $DEFAULT_DIRECTORY if(!defined($directory) || ($directory eq ''));
 
 	my @config_dirs;
 	if($ENV{'CONFIG_DIR'}) {
@@ -201,6 +240,13 @@ sub new
 				'lib',
 				'conf'
 			));
+		}
+
+		# Then the server's own directory for this site: a host serving many
+		# sites keeps one configuration directory per site, named after the site,
+		# under $directory.
+		if(my $server_dir = $class->site_directory(directory => $directory, sitename => $info->domain_name())) {
+			push(@config_dirs, $server_dir);
 		}
 
 		@config_dirs = reverse @config_dirs;
@@ -307,6 +353,40 @@ sub new
 	}
 
 	return bless $config, $class;
+}
+
+=head2 site_directory
+
+Purpose: the directory a server keeps this site's configuration in, which is
+C<$directory> and the site's name - F</usr/lib/vwf/example.com>.
+
+Takes the root and the name:
+	directory - the server's root, defaulting to F</usr/lib/vwf>
+	sitename - the site's name, as the request gives it, which may carry a port
+
+Returns: the directory, or nothing when the name is not one a directory can be
+made of.  The name arrives in the request's F<Host> header, so nothing that could
+step out of the root - a slash, a colon that is not a port, a F<..> - is used:
+a server that has not been given a configuration for a site is asked for no
+directory rather than one somebody else has written.
+
+=cut
+
+sub site_directory
+{
+	shift;	# The class, which this does not need
+	my %args = @_;
+
+	my $sitename = $args{'sitename'};
+	if(defined($sitename) && ($sitename =~ /\A(.+):\d+\z/)) {
+		$sitename = $1;	# The site's own name, without a port on it
+	}
+	return undef unless(defined($sitename) && ($sitename =~ /\A[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\z/) && (index($sitename, '..') < 0));
+
+	my $directory = $args{'directory'};
+	$directory = $DEFAULT_DIRECTORY if(!defined($directory) || ($directory eq ''));
+
+	return File::Spec->catdir($directory, $sitename);
 }
 
 =head2 config_file_names

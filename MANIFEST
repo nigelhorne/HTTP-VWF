@@ -39,7 +39,9 @@ t/display_tests.t
 t/display_throttle.t
 t/get_params
 t/get_template_path
+t/page-render.t
 t/security_tests.t
+t/server-conf-dir.t
 t/site-config.t
 t/vwf-sync.t
 templates/default/robot/HTTP/VWF/Display/index.html

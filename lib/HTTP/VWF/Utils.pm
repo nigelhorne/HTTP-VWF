@@ -34,6 +34,7 @@ our @EXPORT = qw(create_disc_cache create_memory_cache distance);
 use CHI;
 use DBI;
 use Error::Simple;
+use File::Path ();	# make_path, for a cache directory that is not there yet
 use Module::Runtime qw(require_module);	# Safe dynamic loading; avoids string eval
 use Params::Get 0.13;
 use Try::Tiny;
@@ -99,7 +100,11 @@ Parameters:
 - config: Configuration hash reference (required)
 - logger: Logger object (optional)
 - namespace: Cache namespace (optional)
-- root_dir: Root directory override (optional)
+- root_dir: Root directory override (optional).  With none given, and no cache
+  directory named in the configuration, CHI's own default under the system
+  temporary directory is used: the site's root_dir is where its files live,
+  not where its cache belongs, so it is not used as a cache directory.  A
+  cache directory that is named but does not exist yet is created.
 
 Returns: CHI cache object
 
@@ -206,7 +211,7 @@ sub _validate_cache_config($config, $cache_type) {
 	}
 
 	# Validate memory parameters
-	if(exists($cache_config->{'datastore'}) && exists($cache_config->{'global'}) && (my $driver = $cache_config->{'driver'})) {
+	if(exists($cache_config->{'datastore'}) && exists($cache_config->{'global'}) && $cache_config->{'driver'}) {
 		# CHI catches this as well, but putting it here helps to track the error
 		croak('Memory cache cannot have both global and datastore');
 	}
@@ -355,13 +360,26 @@ sub _configure_memcached($chi_args, $config, $args, $logger) {
 }
 
 sub _configure_file_based($chi_args, $config, $args) {
-	my $root_dir = $ENV{'root_dir'} || $args->{'root_dir'} || $config->{root_dir} || $args->{'config'}->{root_dir};
+	# Only a cache directory that was actually asked for is used here.
+	# $ENV{root_dir} and the configuration's root_dir say where the site's own
+	# files live, not where its cache belongs: using them put one directory per
+	# cache namespace, named after the package (CGI+3a+3aLingua), in the served
+	# tree, in whichever directory the caller happened to be run from.  With no
+	# cache directory given, CHI falls back to its own default under the system
+	# temporary directory.
+	my $root_dir = $args->{'root_dir'} || $config->{root_dir};
 
-	croak "File-based cache drivers require 'root_dir' parameter" unless $root_dir;
-	croak "Root directory '$root_dir' does not exist or is not writable"
-		unless -d $root_dir && -w $root_dir;
+	if(defined($root_dir)) {
+		# Absent is normal on a first run, and a site whose configured cache
+		# directory has gone missing used to be handed the site root rather
+		# than being stopped, so make it instead of failing.  An unusable
+		# directory is still reported.
+		File::Path::make_path($root_dir) unless -d $root_dir;
 
-	$chi_args->{root_dir} = $root_dir;
+		croak "Root directory '$root_dir' does not exist or is not writable"
+			unless -d $root_dir && -w $root_dir;
+		$chi_args->{root_dir} = $root_dir;
+	}
 }
 
 sub _parse_server_config($config, $logger) {
@@ -381,7 +399,7 @@ sub _parse_server_config($config, $logger) {
 
 		# Validate server format
 		if ($server_entry =~ /^([a-zA-Z0-9.-]+):(\d+)$/) {
-			my ($host, $port) = ($1, $2);
+			my $port = $2;
 			croak "Invalid port number: $port" unless $port > 0 && $port <= 65535;
 			push @servers, $server_entry;
 			$logger->debug("Added server: $server_entry") if $logger;

@@ -29,7 +29,7 @@ sub new {
 	# cgi-bin/, before it falls back to the lib/conf directories this module
 	# used to look in by itself.
 	my %config_args = (info => $info);
-	foreach my $key (qw(logger lingua config_directory config_file config)) {
+	foreach my $key (qw(logger lingua config_directory config_file config directory)) {
 		$config_args{$key} = $args{$key} if(defined($args{$key}));
 	}
 

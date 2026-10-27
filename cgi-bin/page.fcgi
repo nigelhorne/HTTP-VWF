@@ -62,10 +62,18 @@ use autodie qw(:all);
 use lib CGI::Info::script_dir() . '/../lib';
 use lib File::HomeDir->my_home() . '/lib/perl5';
 
+use HTTP::VWF;
 use HTTP::VWF::Allow;
 use HTTP::VWF::Blacklist;
 use HTTP::VWF::Config;
 use HTTP::VWF::Utils;
+
+# Where the server keeps the configuration of the sites it serves: one directory
+# per site, named after the site, read when the site has no conf/ of its own
+# beside cgi-bin/.  A site whose host keeps them elsewhere changes this line and
+# nothing else - it is passed to HTTP::VWF->new() below, and to the page modules,
+# so that both read the site's configuration from the same place.
+Readonly my $SERVER_CONF_DIR => '/usr/lib/vwf';
 
 # $TAINT = 1;
 # taint_env();
@@ -381,7 +389,8 @@ sub doit
 
 	# $config is built once per process and reused.  We cannot build it before
 	# the first Accept() because the domain name is not known until then.
-	$config ||= HTTP::VWF::Config->new({
+	$config ||= HTTP::VWF->new(
+		directory => $SERVER_CONF_DIR,
 		logger => $logger,
 		info => $info,
 		debug => $params{'debug'},
@@ -391,7 +400,7 @@ sub doit
 		# this call is what reads the configuration, so the site's list is not
 		# known yet.
 		lingua => CGI::Lingua->new({ supported => [ @DEFAULT_SUPPORTED_LANGUAGES ], info => $info, logger => $logger })
-	});
+	)->config();
 
 	# The site's own settings - its database directory, data modules, languages
 	# and trusted addresses - are read from that configuration, once per process.
@@ -718,13 +727,16 @@ sub doit
 	my $display;
 	my $invalidpage;
 
-	# Arguments forwarded to every HTTP::VWF::Display subclass constructor.
+	# Arguments forwarded to every HTTP::VWF::Display subclass constructor.  The
+	# server's directory is among them because a page reads its configuration for
+	# itself, and has to look where this script did.
 	$args = {
 		cachedir => $cachedir,
 		info => $info,
 		logger => $logger,
 		lingua => $lingua,
 		config => $config,
+		server_directory => $SERVER_CONF_DIR,
 		log => $log
 	};
 
