@@ -22,6 +22,12 @@ LICENSE
 Makefile.PL
 MANIFEST			This list of files
 MANIFEST.SKIP
+proposals/vwf-config-location.md
+proposals/vwf-config-location.patch
+proposals/vwf-optional-prerequisites.md
+proposals/vwf-optional-prerequisites.patch
+proposals/vwf-site-settings.md
+proposals/vwf-site-settings.patch
 README.md
 SECURITY.md
 t/blacklist.t
