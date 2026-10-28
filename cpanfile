@@ -71,7 +71,7 @@ on 'configure' => sub {
 
 on 'test' => sub {
 	requires 'Test::DescribeMe';   # t/vwf-sync.t is an author test
-	requires 'Test::MockObject';
+	requires 'Test::Mockingbird';   # stubbing in t/security_tests.t
 	requires 'Test::Most';
 };
 

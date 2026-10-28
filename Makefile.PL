@@ -24,7 +24,7 @@ WriteMakefile(
 		'ExtUtils::MakeMaker' => 6.64,	# Minimum version for TEST_REQUIRES
 	}, TEST_REQUIRES => {
 		'Test::DescribeMe' => 0,	# t/vwf-sync.t is an author test
-		'Test::MockObject' => 0,
+		'Test::Mockingbird' => 0,
 		'Test::Most' => 0,
 	}, PREREQ_PM => {
 		'Carp' => 0,

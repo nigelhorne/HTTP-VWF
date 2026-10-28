@@ -77,9 +77,14 @@ for a code it does not hold, for a request naming no code, and for a crawler, so
 that the answer to the door's code is an answer about the code.  The site is run
 in `HOME`, `TMPDIR` and `root_dir` directories of the test's own, and the fetch a
 code triggers is pointed at a closed port, so the test needs no network and writes
-nothing into the checkout.
+nothing into the checkout.  The page's other answer - a target fetched and served in
+the code's place, with a `<base>` at the target's origin and the site's own
+analytics in the head - is covered as well: that case is given a target of the
+test's own, a small HTTP server on the loopback address, and a database of the
+test's own, which a copy of the site's configuration in a temporary `CONFIG_DIR`
+points the run at.
 
-Dependencies for the suite: `Test::Most`, `Test::MockObject` and
+Dependencies for the suite: `Test::Most`, `Test::Mockingbird` and
 `Test::DescribeMe` are declared in `Makefile.PL`; `IP::Country::Fast` and `CGI::ACL` are needed for the GeoIP
 parts of `t/blacklist.t`, which skip themselves if they are absent.
 
@@ -397,10 +402,24 @@ until the same change is made there:
   configuration location rather than two.
 
 The patches that reconcile the two trees are in `proposals/`, where proposals
-for VWF are kept - each one carries the diff to apply, and the way to check it is
-to apply it to a clone and run the sync test against that clone with `VWF_HOME`.
-Applying all of them to a clone of `../vwf` makes the sync test pass outright.
-`proposals/` is excluded from the distribution by `MANIFEST.SKIP`.
+for VWF - `proposals/vwf-*.md` - are kept; each one carries the diff to apply,
+and the way to check it is to apply it to a clone and run the sync test against
+that clone with `VWF_HOME`.  Applying all of them to a clone of `../vwf` makes
+the sync test pass outright.
+
+One of them is not a module and is not what that test compares:
+`proposals/vwf-mockingbird.md` changes the two trees' test files, which the
+sync test does not track.  It is applied because the two copies are meant to be
+the same file - the same reason as the rest - and the way to check it is to run
+the two tests in a clone, not the sync test.
+
+`proposals/links-origin-port.md` is the one proposal that is not for VWF.  It
+closes a difference in the other direction - between a port in `examples/` and
+the site it was taken from, `../links` - and it has been applied in that tree,
+where the checking is by hand rather than by a test in this one; the copy in
+`examples/` is what it was written against, and `t/links-example.t` is what
+pins the rule here.  The pairs are listed in `MANIFEST`, so they ship with the
+distribution.
 
 `cgi-bin/page.fcgi` diverges too, and the sync test does not track it, because
 the two scripts differ by namespace throughout and so cannot be compared

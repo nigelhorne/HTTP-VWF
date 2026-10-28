@@ -1,9 +1,15 @@
 #!/usr/bin/env perl
 
+# The tests here need no mocking library: the handles the page is built from
+# are real objects of the framework's own, and the one thing that cannot be
+# built for real - a request to a site that is not there - is answered by a
+# configuration of this test's own in a temporary CONFIG_DIR.
+
 use strict;
 use warnings;
 use Test::More;
-use Test::MockObject;
+use CGI::Info;
+use CGI::Lingua;
 use FindBin qw($Bin);
 use File::Spec;
 use File::Temp qw(tempdir);
@@ -35,31 +41,40 @@ subtest 'Display module initialization' => sub {
 	plan tests => 2;
 	
 	# HTTP::VWF::Display->new() reads a configuration file.  Give it its own,
-	# rather than whatever happens to be in ~/lib/conf on this machine.
+	# rather than whatever happens to be in ~/lib/conf on this machine.  It
+	# carries the reCAPTCHA settings the page reads from its config handle.
 	my $config_dir = tempdir(CLEANUP => 1);
 	open(my $fout, '>', File::Spec->catfile($config_dir, 'default')) or die "$config_dir/default: $!";
-	print $fout "<?xml version=\"1.0\"?>\n<config><memory_cache><driver>Null</driver></memory_cache></config>\n";
+	print $fout <<'EOF';
+<?xml version="1.0"?>
+<config>
+	<memory_cache>
+		<driver>Null</driver>
+	</memory_cache>
+	<recaptcha>
+		<enabled>1</enabled>
+		<site_key>test_key</site_key>
+		<secret_key>test_secret</secret_key>
+	</recaptcha>
+</config>
+EOF
 	close $fout;
 	local $ENV{'CONFIG_DIR'} = $config_dir;
 
-	# Create minimal mock objects
-	my $mock_info = Test::MockObject->new();
-	$mock_info->mock('domain_name', sub { 'example.com' });
-	my $mock_config = Test::MockObject->new();
-	my $mock_lingua = Test::MockObject->new();
-	
-	$mock_config->mock('recaptcha', sub {
-		return {
-			site_key => 'test_key',
-			secret_key => 'test_secret',
-			enabled => 1
-		};
-	});
-	
+	# The handles are real objects, as the ones page.fcgi builds are: CGI::Info
+	# supplies the request, CGI::Lingua the language, and HTTP::VWF::Config the
+	# site's settings - recaptcha() among them, which captcha.pm reads through
+	# the handle it is given.
+	CGI::Info->reset();
+	my $info = CGI::Info->new();
+	my $lingua = CGI::Lingua->new({ supported => ['en-gb'], language => 'en' });
+	require HTTP::VWF::Config;
+	my $config = HTTP::VWF::Config->new({ info => $info });
+
 	my $display = HTTP::VWF::Display::captcha->new({
-		info => $mock_info,
-		config => $mock_config,
-		lingua => $mock_lingua,
+		info => $info,
+		config => $config,
+		lingua => $lingua,
 	});
 	
 	ok($display, 'Display object created');

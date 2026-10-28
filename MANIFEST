@@ -44,6 +44,10 @@ proposals/vwf-config-location.md
 proposals/vwf-config-location.patch
 proposals/vwf-imports.md
 proposals/vwf-imports.patch
+proposals/links-origin-port.md
+proposals/links-origin-port.patch
+proposals/vwf-mockingbird.md
+proposals/vwf-mockingbird.patch
 proposals/vwf-optional-prerequisites.md
 proposals/vwf-optional-prerequisites.patch
 proposals/vwf-site-settings.md

@@ -3,7 +3,8 @@
 use strict;
 use warnings;
 use Test::More;
-use Test::MockObject;
+use Test::Mockingbird;
+use CGI::Info;
 use CHI;
 use File::Temp qw(tempdir tempfile);
 use Time::HiRes qw(sleep);
@@ -127,105 +128,106 @@ subtest 'Test blacklisted() function from page.fcgi' => sub {
 	# Reset the blacklist hash
 	%TestPageFCGI::blacklisted_ip = ();
 	
-	# Create mock CGI::Info object
-	my $mock_info = Test::MockObject->new();
-	$mock_info->mock('status', sub {
-		my ($self, $val) = @_;
-		$self->{_status} = $val if defined $val;
-		return $self->{_status} // 200;
-	});
+	# The request object is a real CGI::Info, as page.fcgi's is - its status()
+	# is the one that records the 403 - and the only thing stubbed is
+	# as_string(), the request string the function scans for SQL.  Each case
+	# stubs it afresh; restore_all() takes the stub off again at the end.
+	CGI::Info->reset();
+	my $info = CGI::Info->new();
 	
 	# Test 1: SELECT with AND pattern (first time - not yet blacklisted)
-	$mock_info->mock('as_string', sub { return 'SELECT * FROM users WHERE id=1 AND password=admin' });
+	mock_return 'CGI::Info::as_string' => 'SELECT * FROM users WHERE id=1 AND password=admin';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.100';
-	my $result = TestPageFCGI::blacklisted($mock_info);
+	my $result = TestPageFCGI::blacklisted($info);
 	ok($result, 'Should blacklist: SELECT with AND');
-	is($mock_info->status(), 403, 'Status should be set to 403');
+	is($info->status(), 403, 'Status should be set to 403');
 	ok($TestPageFCGI::blacklisted_ip{'192.168.1.100'}, 'IP should be added to blacklist hash');
 	
 	# Test 2: Already blacklisted IP
 	%TestPageFCGI::blacklisted_ip = ('1.2.3.4' => 1);
 	$ENV{'REMOTE_ADDR'} = '1.2.3.4';
-	$mock_info->{_status} = 200;
-	ok(TestPageFCGI::blacklisted($mock_info), 'Should detect already blacklisted IP');
-	is($mock_info->status(), 403, 'Status should be set to 403 for blacklisted IP');
+	$info->status(200);
+	ok(TestPageFCGI::blacklisted($info), 'Should detect already blacklisted IP');
+	is($info->status(), 403, 'Status should be set to 403 for blacklisted IP');
 	
 	# Test 3: ORDER BY pattern
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return 'id=1 ORDER BY column' });
+	mock_return 'CGI::Info::as_string' => 'id=1 ORDER BY column';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.101';
-	$mock_info->{_status} = 200;
-	ok(TestPageFCGI::blacklisted($mock_info), 'Should blacklist: ORDER BY');
+	$info->status(200);
+	ok(TestPageFCGI::blacklisted($info), 'Should blacklist: ORDER BY');
 	
 	# Test 4: OR NOT pattern
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return '1=1 OR NOT 2=2' });
+	mock_return 'CGI::Info::as_string' => '1=1 OR NOT 2=2';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.102';
-	$mock_info->{_status} = 200;
-	ok(TestPageFCGI::blacklisted($mock_info), 'Should blacklist: OR NOT');
+	$info->status(200);
+	ok(TestPageFCGI::blacklisted($info), 'Should blacklist: OR NOT');
 	
 	# Test 5: AND with numeric equality
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return 'test AND 1=1' });
+	mock_return 'CGI::Info::as_string' => 'test AND 1=1';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.103';
-	$mock_info->{_status} = 200;
-	ok(TestPageFCGI::blacklisted($mock_info), 'Should blacklist: AND with numeric equality');
+	$info->status(200);
+	ok(TestPageFCGI::blacklisted($info), 'Should blacklist: AND with numeric equality');
 	
 	# Test 6: THEN ELSE END pattern
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return 'CASE WHEN 1=1 THEN true ELSE false END' });
+	mock_return 'CGI::Info::as_string' => 'CASE WHEN 1=1 THEN true ELSE false END';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.104';
-	$mock_info->{_status} = 200;
-	ok(TestPageFCGI::blacklisted($mock_info), 'Should blacklist: THEN ELSE END');
+	$info->status(200);
+	ok(TestPageFCGI::blacklisted($info), 'Should blacklist: THEN ELSE END');
 	
 	# Test 7: AND with SELECT
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return 'username=admin AND SELECT password' });
+	mock_return 'CGI::Info::as_string' => 'username=admin AND SELECT password';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.105';
-	$mock_info->{_status} = 200;
-	ok(TestPageFCGI::blacklisted($mock_info), 'Should blacklist: AND with SELECT');
+	$info->status(200);
+	ok(TestPageFCGI::blacklisted($info), 'Should blacklist: AND with SELECT');
 	
 	# Test 8: Multiple AND clauses
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return 'a=1 AND b=2 AND c=3' });
+	mock_return 'CGI::Info::as_string' => 'a=1 AND b=2 AND c=3';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.106';
-	$mock_info->{_status} = 200;
-	ok(TestPageFCGI::blacklisted($mock_info), 'Should blacklist: Multiple AND clauses');
+	$info->status(200);
+	ok(TestPageFCGI::blacklisted($info), 'Should blacklist: Multiple AND clauses');
 	
 	# Test 9: AND CASE WHEN
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return 'id=1 AND CASE WHEN 1=1' });
+	mock_return 'CGI::Info::as_string' => 'id=1 AND CASE WHEN 1=1';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.107';
-	$mock_info->{_status} = 200;
-	ok(TestPageFCGI::blacklisted($mock_info), 'Should blacklist: AND CASE WHEN');
+	$info->status(200);
+	ok(TestPageFCGI::blacklisted($info), 'Should blacklist: AND CASE WHEN');
 	
 	# Test 10: Normal query should NOT be blacklisted
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return 'search=normal query text' });
+	mock_return 'CGI::Info::as_string' => 'search=normal query text';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.108';
-	$mock_info->{_status} = 200;
-	ok(!TestPageFCGI::blacklisted($mock_info), 'Should NOT blacklist: normal query');
+	$info->status(200);
+	ok(!TestPageFCGI::blacklisted($info), 'Should NOT blacklist: normal query');
 	
 	# Test 11: Empty string should NOT be blacklisted
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return '' });
+	mock_return 'CGI::Info::as_string' => '';
 	$ENV{'REMOTE_ADDR'} = '192.168.1.109';
-	$mock_info->{_status} = 200;
-	ok(!TestPageFCGI::blacklisted($mock_info), 'Should NOT blacklist: empty string');
+	$info->status(200);
+	ok(!TestPageFCGI::blacklisted($info), 'Should NOT blacklist: empty string');
 	
 	# Test 12: Undefined as_string should NOT be blacklisted
 	%TestPageFCGI::blacklisted_ip = ();
-	$mock_info->mock('as_string', sub { return undef });
+	mock_return 'CGI::Info::as_string' => undef;
 	$ENV{'REMOTE_ADDR'} = '192.168.1.110';
-	$mock_info->{_status} = 200;
-	ok(!TestPageFCGI::blacklisted($mock_info), 'Should NOT blacklist: undefined as_string');
+	$info->status(200);
+	ok(!TestPageFCGI::blacklisted($info), 'Should NOT blacklist: undefined as_string');
 	
 	# Test 13: No REMOTE_ADDR should return false
 	%TestPageFCGI::blacklisted_ip = ();
 	delete $ENV{'REMOTE_ADDR'};
-	$mock_info->mock('as_string', sub { return 'SELECT * AND password' });
-	$mock_info->{_status} = 200;
-	ok(!TestPageFCGI::blacklisted($mock_info), 'Should NOT blacklist: no REMOTE_ADDR');
+	mock_return 'CGI::Info::as_string' => 'SELECT * AND password';
+	$info->status(200);
+	ok(!TestPageFCGI::blacklisted($info), 'Should NOT blacklist: no REMOTE_ADDR');
+	
+	restore_all();
 };
 
 SKIP: {
@@ -351,12 +353,8 @@ subtest 'Integration: Rate limiting and blacklisting together' => sub {
 	my $cache = CHI->new(driver => 'Memory', datastore => {});
 	%TestPageFCGI::blacklisted_ip = ();
 	
-	my $mock_info = Test::MockObject->new();
-	$mock_info->mock('status', sub {
-		my ($self, $val) = @_;
-		$self->{_status} = $val if defined $val;
-		return $self->{_status} // 200;
-	});
+	CGI::Info->reset();
+	my $info = CGI::Info->new();
 	
 	my $attacker_ip = '1.2.3.4';
 	my $normal_ip = '5.6.7.8';
@@ -364,9 +362,9 @@ subtest 'Integration: Rate limiting and blacklisting together' => sub {
 	
 	# Scenario 1: Normal user making requests
 	$ENV{'REMOTE_ADDR'} = $normal_ip;
-	$mock_info->mock('as_string', sub { return 'page=index&action=view' });
+	mock_return 'CGI::Info::as_string' => 'page=index&action=view';
 	
-	ok(!TestPageFCGI::blacklisted($mock_info), 'Normal request should not be blacklisted');
+	ok(!TestPageFCGI::blacklisted($info), 'Normal request should not be blacklisted');
 	
 	# Make some requests
 	for (1..5) {
@@ -379,28 +377,30 @@ subtest 'Integration: Rate limiting and blacklisting together' => sub {
 	
 	# Scenario 2: Attacker tries SQL injection
 	$ENV{'REMOTE_ADDR'} = $attacker_ip;
-	$mock_info->mock('as_string', sub { return 'id=1 AND 1=1 UNION SELECT password' });
-	$mock_info->{_status} = 200;
+	mock_return 'CGI::Info::as_string' => 'id=1 AND 1=1 UNION SELECT password';
+	$info->status(200);
 	
-	ok(TestPageFCGI::blacklisted($mock_info), 'SQL injection attempt should be blacklisted');
+	ok(TestPageFCGI::blacklisted($info), 'SQL injection attempt should be blacklisted');
 	ok($TestPageFCGI::blacklisted_ip{$attacker_ip}, 'Attacker IP should be in blacklist');
 	
 	# Scenario 3: Attacker tries again with normal request
-	$mock_info->mock('as_string', sub { return 'page=index' });
-	$mock_info->{_status} = 200;
+	mock_return 'CGI::Info::as_string' => 'page=index';
+	$info->status(200);
 	
-	ok(TestPageFCGI::blacklisted($mock_info), 'Blacklisted IP should be blocked even with normal request');
+	ok(TestPageFCGI::blacklisted($info), 'Blacklisted IP should be blocked even with normal request');
 	
 	# Scenario 4: Normal user continues
 	$ENV{'REMOTE_ADDR'} = $normal_ip;
-	$mock_info->mock('as_string', sub { return 'page=about' });
-	$mock_info->{_status} = 200;
+	mock_return 'CGI::Info::as_string' => 'page=about';
+	$info->status(200);
 	
-	ok(!TestPageFCGI::blacklisted($mock_info), 'Normal user should still not be blacklisted');
+	ok(!TestPageFCGI::blacklisted($info), 'Normal user should still not be blacklisted');
 	
 	# Verify blacklist is persistent
 	ok($TestPageFCGI::blacklisted_ip{$attacker_ip}, 'Attacker should remain in blacklist');
 	ok(!$TestPageFCGI::blacklisted_ip{$normal_ip}, 'Normal user should not be in blacklist');
+	
+	restore_all();
 };
 
 done_testing();
@@ -434,7 +434,8 @@ Or with prove:
 =head1 REQUIREMENTS
 
 - Test::More
-- Test::MockObject
+- Test::Mockingbird
+- CGI::Info
 - CHI
 - File::Temp
 - Time::HiRes

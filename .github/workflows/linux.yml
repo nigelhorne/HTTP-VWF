@@ -45,7 +45,7 @@ jobs:
           # warnings::unused is here because the step below runs it against
           # page.fcgi and against every module under lib/; without it those
           # checks could only report their own absence.
-          cpanm --skip-satisfied -qn warnings::unused File::HomeDir Config::Abstraction Template::Filters Carp::Always Test::MockObject JSON::MaybeXS
+          cpanm --skip-satisfied -qn warnings::unused File::HomeDir Config::Abstraction Template::Filters Carp::Always Test::Mockingbird JSON::MaybeXS
           cpanm --skip-satisfied -qn Crypt::URandom File::pfopen Timer::Simple File::Slurp
           cpanm --skip-satisfied -qn Filesys::Df Sys::MemInfo Sys::Uptime System::Info Data::Validate::URI Params::Validate::Strict
           cpanm --skip-satisfied -qn Test::Most Readonly IP::Country::Fast CGI::Info~1.14
