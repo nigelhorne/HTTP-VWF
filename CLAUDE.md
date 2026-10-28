@@ -390,8 +390,9 @@ added to one side and not the other is reported rather than silently skipped.
 `lib/HTTP/VWF.pm` is deliberately outside the comparison: it is this
 distribution's own front door and VWF has no `VWF.pm` to compare it against.
 
-Four modules here deliberately differ from VWF's, and the sync test reports them
-until the same change is made there:
+Four modules here deliberately differ from VWF's.  Every one of those changes
+has been applied to vwf itself, so the sync test is clean against it; the list
+is here so that a re-sync from an older VWF checkout does not quietly undo them:
 
 - `lib/HTTP/VWF/Display/meta_data.pm` and `lib/HTTP/VWF/Allow.pm` load their
   optional module at run time and carry on without it, so that a platform which
@@ -399,7 +400,12 @@ until the same change is made there:
 - `lib/HTTP/VWF/Display/table.pm` and `lib/HTTP/VWF/Config.pm` read the site's
   own `conf/`, beside `cgi-bin/`, instead of only `~/lib/conf`, and give that
   directory the precedence the search order claims for it - so a site keeps one
-  configuration location rather than two.
+  configuration location rather than two;
+- `lib/HTTP/VWF/Config.pm` also knows the directory a host keeps its sites'
+  configuration in, `/usr/lib/vwf/<sitename>`, named in `HTTP::VWF->new(directory
+  => ...)` or in VWF's case `VWF::Config->new(directory => ...)`; `Display.pm`
+  looks there too, through `server_directory`, so a site configured only on the
+  server still renders.
 
 The patches that reconcile the two trees are in `proposals/`, where proposals
 for VWF - `proposals/vwf-*.md` - are kept; each one carries the diff to apply,
@@ -425,10 +431,10 @@ distribution.
 the two scripts differ by namespace throughout and so cannot be compared
 verbatim.  The port's copy reads a site's own settings - its database directory,
 data modules, languages and allowed addresses - from the domain's configuration
-file, with the values VWF's script still hardcodes as the defaults;
-`proposals/vwf-site-settings.md` carries that change for VWF's copy.  Until it
-lands there the scripts are kept in step by hand, and `t/site-config.t` pins the
-defaults in this copy.
+file, with the values VWF's script used to hardcode as the defaults;
+`proposals/vwf-site-settings.md` carries that change, and it has been applied to
+VWF's copy, so the two scripts now differ only by the namespace and this
+distribution's front door.  `t/site-config.t` pins the defaults in this copy.
 
 Sites that still carry their own renamed copy use the same kind of test - see
 `Geo::Coder::Free`'s `t/vwf-sync.t`.

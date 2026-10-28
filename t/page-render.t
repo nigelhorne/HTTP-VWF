@@ -61,8 +61,8 @@ make_path($conf);
 # answered from another; a CSRF secret, so that the script has nothing to warn
 # about; one language, so that the template it picks is predictable; and the log
 # where this test can read it.  This is the fixture VWF's own render test writes
-# too, apart from that language key: VWF's script offers en-gb by its own default
-# rather than from its configuration, so the two cannot be the same file.
+# too: the languages are a site setting in both scripts, so the two files are now
+# the same.
 write_file(File::Spec->catfile($conf, 'default'), <<"CONFIG");
 <?xml version="1.0"?>
 <config>

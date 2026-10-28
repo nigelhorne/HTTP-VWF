@@ -50,6 +50,8 @@ proposals/vwf-mockingbird.md
 proposals/vwf-mockingbird.patch
 proposals/vwf-optional-prerequisites.md
 proposals/vwf-optional-prerequisites.patch
+proposals/vwf-site-directory.md
+proposals/vwf-site-directory.patch
 proposals/vwf-site-settings.md
 proposals/vwf-site-settings.patch
 README.md
