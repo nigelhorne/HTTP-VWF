@@ -170,6 +170,7 @@ my @cases = (
 		status => '200 OK',
 		code => 200,
 		template => 'index.tmpl',
+		has_form => 1,
 		logged => 1,
 	},
 	{
@@ -225,8 +226,6 @@ sub csrf_token_in {
 	return $token;
 }
 
-my %csrf_token;
-
 my %rendered = map { $_->{'name'} => render_page(@{$_->{'args'}}) } @cases;
 
 foreach my $case (@cases) {
@@ -262,9 +261,14 @@ foreach my $case (@cases) {
 				is($count, 1, "it was served with $header->[0]: $header->[1]");
 			}
 
-			$csrf_token{$case->{'name'}} = csrf_token_in($got->{'stdout'});
-			ok(defined($csrf_token{$case->{'name'}}),
-				'and a CSRF token cookie: time, entropy in hex, signature, HttpOnly, SameSite=Strict');
+			# A page without a form must not have one: FCGI::Buffer won't cache
+			# or save a page that has a Set-Cookie header
+			if($case->{'has_form'}) {
+				ok(defined(csrf_token_in($got->{'stdout'})),
+					'and a CSRF token cookie: time, entropy in hex, signature, HttpOnly, SameSite=Strict');
+			} else {
+				unlike($got->{'stdout'}, qr/^Set-Cookie: csrf_token=/m, 'and no CSRF token cookie, it has no form');
+			}
 		} else {
 			# The point of the case: the file is not in the answer
 			unlike($got->{'stdout'}, qr/^root:/m, '/etc/passwd was not served');
@@ -291,21 +295,6 @@ subtest 'the SQL injection attempt, run from the command line' => sub {
 	like($got->{'stdout'}, qr/SQL injection attempt blocked/,
 		'   with the attempt recorded as blocked');
 };
-
-# A fresh token on every page load, as the framework says it issues: two pages
-# served in the same run do not share one.  Both halves of that are checked: the
-# tokens differ, and so do the 256 bits of entropy in the middle of them, which
-# is the part that would be reused if the entropy had stopped being drawn per
-# load - a difference in the time the tokens were made would hide that from a
-# comparison of the tokens alone.  VWF's own render test checks the same pair.
-{
-	my @tokens = map { $csrf_token{$_->{'name'}} }
-		grep { $_->{'kind'} eq 'page' } @cases;
-	my @entropy = map { (split(/:/, $_ // ''))[1] } @tokens;
-
-	isnt($tokens[0], $tokens[1], 'each page load is served a fresh CSRF token');
-	isnt($entropy[0], $entropy[1], '   and its entropy is new, not the same token reissued');
-}
 
 # The title is one this test wrote, so seeing it on the page is the proof that
 # the configuration this test wrote is the one the script read.
@@ -361,5 +350,20 @@ subtest 'the access log' => sub {
 		}
 	}
 };
+
+# A fresh token on every load of a page with a form, as the framework says it
+# issues: two loads in the same run do not share one.  These come after the access
+# log is checked, since they are logged too.  Both halves are checked: the tokens
+# differ, and so do the 256 bits of entropy in the middle of them, which
+# is the part that would be reused if the entropy had stopped being drawn per
+# load - a difference in the time the tokens were made would hide that from a
+# comparison of the tokens alone.  VWF's own render test checks the same pair.
+{
+	my @tokens = map { csrf_token_in(render_page('page=index')->{'stdout'}) } (1, 2);
+	my @entropy = map { (split(/:/, $_ // ''))[1] } @tokens;
+
+	isnt($tokens[0], $tokens[1], 'each page load is served a fresh CSRF token');
+	isnt($entropy[0], $entropy[1], '   and its entropy is new, not the same token reissued');
+}
 
 done_testing();
