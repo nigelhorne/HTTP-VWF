@@ -1,6 +1,5 @@
 package HTTP::VWF;
 
-# HTTP::VWF is licensed under GPL2.0 for personal use only
 # njh@nigelhorne.com
 
 use strict;
@@ -137,7 +136,7 @@ unless($config_abstraction) {
 # from the domain's configuration file - see "Site Settings" in HTTP::VWF's
 # documentation.  What is below is what this script used to hardcode, so a site
 # that says nothing behaves exactly as it did before.  The settings are resolved
-# by site_setup() on the first request, because the configuration cannot be read
+# by _site_setup() on the first request, because the configuration cannot be read
 # until the domain is known.
 Readonly my $DEFAULT_DATABASE_DIR => 'data';		# beside cgi-bin/
 Readonly my @DEFAULT_DATA_MODULES => qw(HTTP::VWF::Data::index);
@@ -159,7 +158,7 @@ Readonly my @DEFAULT_RATE_LIMIT_TRUSTED_IPS => qw(127.0.0.1 192.168.1.1);
 require_module('HTTP::VWF::Data::vwf_log');
 HTTP::VWF::Data::vwf_log->import() if(HTTP::VWF::Data::vwf_log->can('import'));
 
-# Resolved from the configuration by site_setup(): the directory holding the
+# Resolved from the configuration by _site_setup(): the directory holding the
 # site's databases, and the data handles it declared, by the name each is passed
 # to a page under (index, say).
 my $database_dir;
@@ -169,7 +168,7 @@ my %data;
 my @supported_languages;
 my @rate_limit_trusted_ips;
 
-# 1 once site_setup() has run.  The configuration, the database directory, the
+# 1 once _site_setup() has run.  The configuration, the database directory, the
 # data handles and these lists last for the life of the process, not for one
 # request.
 my $site_ready;
@@ -320,11 +319,11 @@ given, or F</usr/lib/vwf>.  L<HTTP::VWF::Config> adds the site's own name to it.
 
 =cut
 
-sub directory
+sub _directory
 {
 	my $self = shift;
 
-	return $self->{'directory'} // $HTTP::VWF::Config::DEFAULT_DIRECTORY;
+	return $self->{'directory'} // $ENV{root_dir} // $HTTP::VWF::Config::DEFAULT_DIRECTORY;
 }
 
 =head2 config
@@ -335,13 +334,13 @@ L<HTTP::VWF::Config> describes the rest of the search.
 
 =cut
 
-sub config
+sub _config
 {
 	my $self = shift;
 
 	return $self->{'config'} ||= HTTP::VWF::Config->new({
 		%{$self->{'params'}},
-		directory => $self->directory(),
+		directory => $self->_directory(),
 	});
 }
 
@@ -404,11 +403,13 @@ sub run
 	# my $request = FCGI::Request($stdin, $stdout, $stderr);
 	my $request = FCGI::Request();
 
+warn('YYYYYYYYYYY');
 	# ─── Main FCGI request loop ───────────────────────────────────────────────────
 	# Accept() blocks until the web server sends a new request.  It returns a
 	# negative value when the server wants this worker to exit (e.g. graceful
 	# shutdown), which breaks the loop naturally.
 	while($handling_request = ($request->Accept() >= 0)) {
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 
 		# REMOTE_ADDR is absent when running from the command line for testing.
 		# Switch to a verbose debug logger and single-shot mode in that case.
@@ -427,19 +428,28 @@ sub run
 				$ENV{'HTTP_ACCEPT_LANGUAGE'} = lc($lang);
 			}
 
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 			Database::Abstraction::init({ logger => $logger });
 
 			# Replace the production logger with a simple STDOUT printer.
-			$logger = Log::Abstraction->new(logger => sub { print join(', ', @{$_[0]->{'message'}}), "\n" }, level => 'debug');
+print STDERR '>>>>>>>> ', __LINE__, "\n";
+			$logger = Log::Abstraction->new(logger => sub { print STDERR join(', ', @{$_[0]->{'message'}}), "\n" }, level => 'debug');
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 			Log::WarnDie->dispatcher($logger);
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 			$info->set_logger($logger);
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 			set_data_loggers($logger);
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 
 			# Enable full stack traces in Error.pm for command-line debugging.
 			$Error::Debug = 1;
 			try {
-				doit(debug => 1);
+print STDERR '>>>>>>>> ', __LINE__, "\n";
+				$self->_doit(debug => 1);
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 			} catch Error with {
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 				my $msg = shift;
 				warn "$msg\n", $msg->stacktrace();
 				$logger->error($msg);
@@ -465,7 +475,7 @@ sub run
 		# Dispatch the request.  Any unhandled Error.pm exception is caught here
 		# so a single bad request cannot kill the FCGI worker process.
 		try {
-			doit(debug => 0);
+			$self->_doit(debug => 0);
 		} catch Error with {
 			my $msg = shift;
 			$logger->error("$msg: ", $msg->stacktrace());
@@ -491,33 +501,14 @@ sub run
 	}
 }
 
-sub DESTROY
-{
-	# Clean up resources before shutdown
-	$logger->info('Shutting down');
-	if($buffercache) {
-		$buffercache->purge();
-	}
-	if($rate_limit_cache) {
-		# Memcached can't purge().
-		# I don't like this hardwired code, it would be better if I could find a way to determine if a driver can run purge()
-		$rate_limit_cache->purge() if($rate_limit_cache->short_driver_name() ne 'Memcached');
-	}
-	if($info_cache) {
-		$info_cache->purge();
-	}
-	if($lingua_cache) {
-		$lingua_cache->purge();
-	}
-	CHI->stats->flush();
-	Log::WarnDie->dispatcher(undef);
-}
-
 # ─── doit() — per-request handler ────────────────────────────────────────────
 # Called once per FCGI iteration.  Handles security checks, language detection,
 # template dispatch, response caching, and access logging.
-sub doit
+sub _doit
 {
+	my $self = shift;
+
+print STDERR '>>>>>>>> ', __LINE__, "\n";
 	# Record the wall-clock start time so we can report request duration later.
 	my $request_start = Timer::Simple->new();
 
@@ -532,8 +523,8 @@ sub doit
 	# $config is built once per process and reused.  We cannot build it before
 	# the first Accept() because the domain name is not known until then.
 	# So don't pass $info in since it was created before the connection
-	$config ||= HTTP::VWF->new(
-		directory => $SERVER_CONF_DIR,
+	$config ||= HTTP::VWF::Config->new({
+		directory => $self->_directory(),
 		logger => $logger,
 		debug => $params{'debug'},
 		# A throwaway CGI::Lingua is used here only to satisfy HTTP::VWF::Config;
@@ -542,11 +533,11 @@ sub doit
 		# this call is what reads the configuration, so the site's list is not
 		# known yet.
 		lingua => CGI::Lingua->new({ supported => [ @DEFAULT_SUPPORTED_LANGUAGES ], info => $info, logger => $logger })
-	)->config();
+	});
 
 	# The site's own settings - its database directory, data modules, languages
 	# and trusted addresses - are read from that configuration, once per process.
-	site_setup($config);
+	$self->_site_setup($config);
 
 	# deny_cloud() blocks all known cloud provider address ranges (AWS, GCP,
 	# Azure) which generate almost no legitimate human traffic but are a
@@ -1141,8 +1132,9 @@ sub valid_pages
 # the database directory it names, load the data modules it names and give the
 # pages the languages and addresses it names.  Everything left unsaid keeps the
 # default it had when these values were written into this script.
-sub site_setup
+sub _site_setup
 {
+	my $self = shift;
 	my $config = shift;
 
 	return if($site_ready);
@@ -1198,7 +1190,7 @@ sub site_setup
 
 # Give the current logger to every data handle.  This runs before each request,
 # since command-line mode replaces the logger; the handles themselves are made
-# once, by site_setup().
+# once, by _site_setup().
 sub set_data_loggers
 {
 	my $logger = shift;
@@ -1403,3 +1395,32 @@ sub vwflog
 		Sys::Syslog::closelog();
 	}
 }
+
+sub DESTROY
+{
+	if(defined($^V) && ($^V ge 'v5.14.0')) {
+		return if ${^GLOBAL_PHASE} eq 'DESTRUCT';	# >= 5.14.0 only
+	}
+
+	my $self = shift;
+
+	# Clean up resources before shutdown
+	$logger->info('Shutting down') if(defined($logger));
+	if($buffercache) {
+		$buffercache->purge();
+	}
+	if($rate_limit_cache) {
+		# Memcached can't purge().
+		# I don't like this hardwired code, it would be better if I could find a way to determine if a driver can run purge()
+		$rate_limit_cache->purge() if($rate_limit_cache->short_driver_name() ne 'Memcached');
+	}
+	if($info_cache) {
+		$info_cache->purge();
+	}
+	if($lingua_cache) {
+		$lingua_cache->purge();
+	}
+	CHI->stats->flush();
+	Log::WarnDie->dispatcher(undef);
+}
+
