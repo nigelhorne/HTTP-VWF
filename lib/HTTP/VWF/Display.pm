@@ -120,8 +120,8 @@ use Template::Plugin::EnvHash;
 use Template::Plugin::Math;
 use Template::Plugin::JSON;
 use HTML::SocialMedia;
-use VWF::Blacklist;
-use VWF::Utils qw(create_memory_cache);
+use HTTP::VWF::Blacklist;
+use HTTP::VWF::Utils qw(create_memory_cache);
 use Error;
 use File::pfopen;
 use Params::Get;
@@ -249,7 +249,7 @@ sub new
 			# Country based blocking
 			if(my $lingua = $params->{lingua}) {
 				my $country = $lingua->country();
-				if(VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->is_blocked($country)) {
+				if(HTTP::VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->is_blocked($country)) {
 					if($params->{'logger'}) {
 						$params->{'logger'}->warn("$ENV{REMOTE_ADDR} is from a blacklisted country $country");
 					}
@@ -390,7 +390,10 @@ sub as_string {
 				# Strip any key or value containing non-alphanumeric characters to
 				# prevent template injection through attacker-controlled cookie data.
 				$args->{cart} = {
-					map { /^[A-Za-z0-9_]+$/ ? ($_ => $cart{$_}) : () } keys %cart
+					map {
+						(/\A[A-Za-z0-9_]+\z/ && defined($cart{$_}) && ($cart{$_} =~ /\A[A-Za-z0-9_]+\z/))
+							? ($_ => $cart{$_}) : ()
+					} keys %cart
 				};
 			}
 		}
@@ -511,7 +514,7 @@ sub get_template_path
 
 	my ($fh, $filename) = File::pfopen::pfopen($prefix, $modulepath, 'tmpl:tt:html:htm:txt');
 	if((!defined($filename)) || (!defined($fh))) {
-		throw Error::Simple("Can't find suitable $modulepath html or tmpl/tt file in $prefix in $dir or a subdir (check " . join(':', @{$self->{'config'}->{'config_path'}}) . ')');
+		throw Error::Simple("Can't find suitable $modulepath html or tmpl/tt file in $prefix in $dir or a subdir (check " . join(':', @{$self->{'config'}->{'config_path'} // []}) . ')');
 	}
 	close($fh);
 	$self->_debug({ message => "Using $filename" });
@@ -704,7 +707,9 @@ sub add_preload
 	#   is not a root-relative path; in particular, CRLF characters in $href
 	#   would let a caller inject arbitrary HTTP headers.
 	croak "Preload href must be a root-relative path starting with '/'"
-		unless $href =~ m{^/[^\r\n]*$};
+		# (?![/\\]): "//host/x" (or "/\host/x") is another site, not a path here;
+		# \z: $ would let a trailing newline through
+		unless defined($href) && $href =~ m{\A/(?![/\\])[^\r\n]*\z};
 
 	# Fonts loaded cross-origin (which is every font in practice, even same-origin,
 	# due to the CORS anonymous-mode requirement) must carry the crossorigin attribute
@@ -830,21 +835,13 @@ sub html {
 
 		# The values in config are defaults which can be overridden by
 		# the values in info, then the values in params
-		my $vals;
-		if(defined($self->{_config})) {
-			if($info->params()) {
-				$vals = { %{$self->{_config}}, %{$info->params()} };
-			} else {
-				$vals = $self->{_config};
-			}
-			if(scalar(keys %params)) {
-				$vals = { %{$vals}, %params };
-			}
-		} elsif(scalar(keys %params)) {
-			$vals = { %{$info->params()}, %params };
-		} else {
-			$vals = $info->params();
-		}
+		# Always build a fresh hash: the template variables added below must
+		# not leak into the object's configuration or into the CGI parameters
+		my $vals = {
+			%{$self->{_config} // {}},
+			%{$info->params() // {}},
+			%params,
+		};
 		$vals->{script_name} = $info->script_name();
 
 		$vals->{cart} = $info->get_cookie(cookie_name => 'cart');

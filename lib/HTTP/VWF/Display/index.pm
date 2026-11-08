@@ -9,6 +9,7 @@ use warnings;
 
 use Carp;
 use HTTP::VWF::Display;
+use HTTP::VWF::Utils qw(create_disc_cache);
 use String::Random;
 
 our @ISA = ('HTTP::VWF::Display');
@@ -68,7 +69,7 @@ sub html {
 				return $self->SUPER::html({ error => 'Fill in name and password' });
 			}
 			# FIXME - read from configuration file
-			if(($params->{'name'} ne 'VWF') || ($params->{'name'} ne 'Password')) {
+			if(($params->{'name'} ne 'VWF') || ($params->{'password'} ne 'Password')) {
 				return $self->SUPER::html({ error => 'Incorrect name or password' });
 			}
 			my $rand = String::Random->new();
@@ -83,12 +84,15 @@ sub html {
 		}
 	}
 	if(my $cookie = $info->get_cookie(cookie_name => 'session')) {
+		# No action was given, so the session store may not be open yet
+		$self->{'logindata'} ||= create_disc_cache(config => $config, logger => $logger, namespace => 'logindata', root_dir => $args{'cachedir'});
 		if(my $key = $self->{'logindata'}->get('VWF')) {
 			if($cookie eq $key) {
 				my $script_name = $info->script_name();
 				return "Location: $script_name?page=admin";
 			}
-			$cache->delete($key);
+			# A wrong cookie must not end the real session: anyone could
+			# send one, and so log the administrator out at will
 		}
 		return $self->SUPER::html({ error => 'You need to login to access the admin screen' });
 	}
@@ -108,8 +112,8 @@ sub html {
 
 	# Rate limit for sending e-mails
         if(my $remote_addr = $ENV{'REMOTE_ADDR'}) {
-                if($self->{'mailfrom'}->{$remote_addr} >= 2) {
-                        $self->{_logger}->info("E-mail blocked to $to");
+                if(($self->{'mailfrom'}->{$remote_addr} // 0) >= 2) {
+                        $self->{_logger}->info("E-mail blocked to $to") if($self->{_logger});
                         return $self->SUPER::html({ error => 'You have reached your limit for sendmail e-mails' });
                 }
                 $self->{'mailfrom'}->{$remote_addr}++;

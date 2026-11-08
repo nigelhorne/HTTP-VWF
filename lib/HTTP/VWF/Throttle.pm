@@ -157,7 +157,9 @@ sub load
 	# here instead.  Reporting nothing is what asks for that: backend_store_ok()
 	# below sees no bucket chain, Data::Throttler creates a fresh one and saves
 	# it over the unusable file.
-	my $data = eval { YAML::Load($yaml) };
+	# YAML warns its way through garbage before it dies; the store is about to
+	# be rebuilt, so that noise would only fill the error log
+	my $data = eval { local $SIG{__WARN__} = sub { }; YAML::Load($yaml) };
 	$data = {} if($@ || ref($data) ne 'HASH');
 	$self->native_classes_restore($data);
 

@@ -135,7 +135,7 @@ sub allow {
 		unless(($addr =~ /^192\.168\./) || $info->baidu()) {
 			my $lingua = $args{'lingua'};
 			my $countries = $args{'config'} ? $args{'config'}->{'blacklist_countries'} : undef;
-			if(defined($lingua) && VWF::Blacklist->new(countries => $countries)->is_blocked($lingua->country())) {
+			if(defined($lingua) && HTTP::VWF::Blacklist->new(countries => $countries)->is_blocked($lingua->country())) {
 				if($logger) {
 					$logger->warn("$addr blocked connexion from ", $lingua->country());
 				}
@@ -158,6 +158,7 @@ sub allow {
 				if($impact > 0) {
 					if($logger) {
 						$logger->warn("$addr: IDS blocked connexion for ", $info->as_string(), " impact = $impact");
+						require Data::Dumper;
 						$logger->warn(Data::Dumper->new([$ids->get_attacks()])->Dump());
 					}
 					if($impact > 30) {
@@ -226,7 +227,7 @@ sub allow {
 	my $cache = $args{'cache'};
 	if(!defined($cache)) {
 		throw Error::Simple('Either cache or config must be given') unless($args{config});
-		$cache = VWF::Utils::create_memory_cache(config => $args{'config'}, namespace => __PACKAGE__, logger => $logger);
+		$cache = HTTP::VWF::Utils::create_memory_cache(config => $args{'config'}, namespace => __PACKAGE__, logger => $logger);
 	}
 	if(defined($cache)) {
 		my $cachecontent = $cache->get($today);

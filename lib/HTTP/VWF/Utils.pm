@@ -194,8 +194,9 @@ sub _validate_cache_config($config, $cache_type) {
 	for my $param (qw(port shm_size max_size)) {
 		next unless exists $cache_config->{$param};
 		my $value = $cache_config->{$param};
+		# \z rather than $: "80\n" must not pass as a number
 		croak "$param must be a positive integer"
-			unless defined $value && $value =~ /^\d+$/ && $value > 0;
+			unless defined $value && $value =~ /\A\d+\z/ && $value > 0;
 	}
 
 	# Validate port range
@@ -384,7 +385,7 @@ sub _parse_server_config($config, $logger) {
 		}
 
 		# Validate server format
-		if ($server_entry =~ /^([a-zA-Z0-9.-]+):(\d+)$/) {
+		if ($server_entry =~ /\A([a-zA-Z0-9.-]+):(\d+)\z/) {
 			my ($host, $port) = ($1, $2);
 			croak "Invalid port number: $port" unless $port > 0 && $port <= 65535;
 			push @servers, $server_entry;
@@ -418,7 +419,8 @@ sub distance($lat1, $lon1, $lat2, $lon2, $unit = 'M') {
 	for my $coord_ref ([\$lat1, 'lat1'], [\$lon1, 'lon1'], [\$lat2, 'lat2'], [\$lon2, 'lon2']) {
 		my ($coord, $name) = @$coord_ref;
 		croak "$name must be defined" unless defined $$coord;
-		croak "$name must be numeric" unless looks_like_number($$coord);
+		# NaN looks like a number but fails every range test, so would slip through
+		croak "$name must be numeric" unless looks_like_number($$coord) && ($$coord == $$coord);
 	}
 
 	# Range validation
@@ -427,13 +429,13 @@ sub distance($lat1, $lon1, $lat2, $lon2, $unit = 'M') {
 	croak('Longitude must be between -180 and 180 degrees')
 		if abs($lon1) > 180 || abs($lon2) > 180;
 
-	# Handle identical points
-	return 0 if $lat1 == $lat2 && $lon1 == $lon2;
-
-	# Validate unit
+	# Validate unit before any shortcut, so that a bad unit is always reported
 	$unit = uc($unit || 'M');
 	croak "Unknown unit '$unit'. Use 'K', 'N', or 'M'"
-		unless $unit =~ /^[KNM]$/;
+		unless $unit =~ /\A[KNM]\z/;
+
+	# Handle identical points
+	return 0 if $lat1 == $lat2 && $lon1 == $lon2;
 
 	# Use optimized calculation with appropriate radius
 	my $radius = $unit eq 'K' ? EARTH_RADIUS_KM :
@@ -444,6 +446,9 @@ sub distance($lat1, $lon1, $lat2, $lon2, $unit = 'M') {
 	my $dlat = deg2rad($lat2 - $lat1);
 	my $dlon = deg2rad($lon2 - $lon1);
 	my $a = sin($dlat/2)**2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dlon/2)**2;
+	# Rounding can push $a fractionally above 1 for near-antipodal points,
+	# and Math::Trig::asin() then returns a Math::Complex rather than a number
+	$a = 1 if $a > 1;
 	my $c = 2 * asin(sqrt($a));
 
 	return $radius * $c;

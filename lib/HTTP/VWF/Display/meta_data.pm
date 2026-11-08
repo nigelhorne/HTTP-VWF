@@ -10,7 +10,8 @@ use warnings;
 use parent 'HTTP::VWF::Display';
 
 use Filesys::Df;
-use List::Util qw(max);
+use List::Util qw(max sum0);
+use Scalar::Util qw(looks_like_number);
 use POSIX qw(strftime);
 use Readonly;
 use System::Info;
@@ -85,7 +86,9 @@ sub get_server_metrics {
 	# Disk usage
 	if(my $df = df('/')) {
 		# prefer 'per' if present
-		$metrics->{disk_used_pct} = $df->{per} // int(100 * ($df->{blocks} - $df->{bfree}) / $df->{blocks});
+		# A filesystem reporting no blocks has no meaningful percentage
+		$metrics->{disk_used_pct} = $df->{per}
+			// ($df->{blocks} ? int(100 * ($df->{blocks} - $df->{bfree}) / $df->{blocks}) : undef);
 	} else {
 		$metrics->{disk_used_pct} = undef;
 	}
@@ -219,7 +222,8 @@ sub get_latency_24h {
 	foreach my $entry ($vwf_log->selectall_array({ domain_name => $domain_name })) {
 		next unless ref $entry eq 'HASH';
 		next unless $entry->{time};
-		next unless exists $entry->{duration_ms};
+		# The log is data, not code: only numbers are durations
+		next unless defined($entry->{duration_ms}) && looks_like_number($entry->{duration_ms});
 
 		my $tp;
 		eval { $tp = Time::Piece->strptime($entry->{time}, '%Y-%m-%d %H:%M:%S') };
@@ -240,7 +244,8 @@ sub get_latency_24h {
 		next unless @vals;
 
 		my $count = @vals;
-		my $avg = int((eval(join('+', @vals)) || 0) / $count);
+		# Never eval() log contents: a crafted duration_ms would run as Perl
+		my $avg = int(sum0(@vals) / $count);
 
 		my $p95_index = int(0.95 * ($count - 1));
 		my $p95 = $vals[$p95_index];
@@ -270,8 +275,9 @@ sub get_slow_endpoints_24h {
 	my %durations;
 
 	foreach my $row (@rows) {
+		next unless ref($row) eq 'HASH';
 		next unless defined $row->{time};
-		next unless defined $row->{duration_ms};
+		next unless defined($row->{duration_ms}) && looks_like_number($row->{duration_ms});
 		next if $row->{duration_ms} <= 0;
 
 		my $tp;
@@ -308,6 +314,7 @@ sub get_slow_endpoints_24h {
 	my @dp;
 	foreach my $row (@ranked) {
 		my $label = $row->{template};
+		$label =~ s/\\/\\\\/g;	# Escape backslashes first, or a trailing one escapes the closing quote
 		$label =~ s/"/\\"/g;
 		$label =~ s/^.+\/templates\///;
 

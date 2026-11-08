@@ -3,7 +3,9 @@ package HTTP::VWF::Display::table;
 use strict;
 use warnings;
 
+use CGI::Info;
 use Config::Auto;
+use File::Spec;
 use Text::xSV::Slurp;
 use File::Slurp;	# For read_file
 
@@ -63,6 +65,9 @@ sub get_file_path {
                 $filename = ref($self);
         }
         $filename =~ s/::/\//g;
+
+        # The table name becomes part of a path, so it must stay inside databases/
+        die "Invalid table name '$filename'" if(($filename =~ m{(?:\A|/)\.\.(?:/|\z)}) || ($filename =~ m{\A/}));
 
         my $rc = "$dir/$filename";
         if((!-f $rc) || (!-r $rc)) {

@@ -3,40 +3,205 @@ package HTTP::VWF;
 # HTTP::VWF is licensed under GPL2.0 for personal use only
 # njh@nigelhorne.com
 
-use warnings;
 use strict;
+use warnings;
+# use diagnostics;
 
-use Carp ();
-use HTTP::VWF::Config ();
+# TODO: Try Log::Any::Adapter::Abstraction instead of Log::Any
 
-=encoding utf-8
+BEGIN {
+	# Sanitize environment variables
+	delete @ENV{qw(IFS CDPATH ENV BASH_ENV)};
+	$ENV{'PATH'} = '/usr/local/bin:/bin:/usr/bin';	# For insecurity
+}
 
-=head1 NAME
+no lib '.';
 
-HTTP::VWF - VWF (Versatile Web Framework) as a distributable package
+use Log::WarnDie 0.09;
+use Carp::Always;
+use CGI::ACL 0.06;	# For deny_cloud
+use CGI::Carp qw(fatalsToBrowser);
+use CGI::Info 0.94;	# Gets all messages
+use CGI::Lingua 0.61;
+use CHI;
+use Class::Simple;
+use Config::Abstraction;
+use Database::Abstraction;
+# use Devel::Confess;
+use File::Basename;
+# use CGI::Alert $ENV{'SERVER_ADMIN'} || 'you@example.com';
+use FCGI;
+use FCGI::Buffer;
+use File::HomeDir;
+use HTTP::Status;
+use Log::Abstraction;
+use Error qw(:try);
+use File::Spec;
+use POSIX qw(strftime);
+use Readonly;
+use Module::Runtime qw(require_module);	# Safe dynamic module loading; avoids string eval
+use Timer::Simple;
+use Time::HiRes;
 
-=head1 SYNOPSIS
+# FIXME: Sometimes gives Insecure dependency in require while running with -T switch in Module/Runtime.pm
+# use Taint::Runtime qw($TAINT taint_env);
+use autodie qw(:all);
 
-A site puts a page script in its own cgi-bin, and a directory of templates
-beside it:
+# Where to find the site's own page modules and configuration.  The framework
+# modules themselves are installed by HTTP-VWF, so this only needs to point at
+# the site's own lib directory when the site has page subclasses of its own.
+# use lib '/usr/lib/example.com/lib';
+# use lib '../lib';
+use lib CGI::Info::script_dir() . '/../lib';
+use lib File::HomeDir->my_home() . '/lib/perl5';
 
-    #!/usr/bin/env perl
-    # cgi-bin/page.fcgi
+use HTTP::VWF;
+use HTTP::VWF::Allow;
+use HTTP::VWF::Blacklist;
+use HTTP::VWF::Config;
+use HTTP::VWF::Utils;
 
-    use HTTP::VWF::Config;
-    use HTTP::VWF::Allow;
-    use HTTP::VWF::Utils;
+# Where the server keeps the configuration of the sites it serves: one directory
+# per site, named after the site, read when the site has no conf/ of its own
+# beside cgi-bin/.  A site whose host keeps them elsewhere changes this line and
+# nothing else - it is passed to HTTP::VWF->new() below, and to the page modules,
+# so that both read the site's configuration from the same place.
+Readonly my $SERVER_CONF_DIR => '/usr/lib/vwf';
 
-    use HTTP::VWF::Display::index;
-    use HTTP::VWF::Display::meta_data;
+# $TAINT = 1;
+# taint_env();
 
-and then
+# Soft rate-limit: present a CAPTCHA challenge when a client exceeds this
+# many requests within $TIME_WINDOW.  Overridable via the config file.
+Readonly my $MAX_REQUESTS => 100;
+Readonly my $TIME_WINDOW => '60s';	# CHI-style duration string
 
-    LANG=en_GB root_dir=/usr/lib/example.com ./page.fcgi page=index
+# Bootstrap CGI::Info before the FCGI accept loop so we can derive the script
+# name and temp directory for logging even before the first real request.
+my $info = CGI::Info->new();
+my @suffixlist = ('.pl', '.fcgi');
+my $script_name = basename($info->script_name(), @suffixlist);
+my $tmpdir = $info->tmpdir();
 
-=cut
+# When running under a real HTTP server, redirect STDERR to a per-script log
+# file in the temp directory so that die/warn messages are captured.
+if($ENV{'HTTP_USER_AGENT'}) {
+	close STDERR;
+	open(STDERR, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"));
+}
 
-our $VERSION = '0.01';
+# Register the log filter that suppresses known-harmless warnings.
+Log::WarnDie->filter(\&filter);
+
+# $vwflog holds the path to the CSV access log; resolved from config on first request.
+my $vwflog;
+
+# These caches are created lazily on the first request and reused across the
+# FCGI accept loop to amortise the cost of cache initialisation.
+my $info_cache;
+my $lingua_cache;
+my $buffercache;
+
+# Derive the environment-variable prefix from the hostname (e.g. MY_SITE_)
+# so that per-domain config overrides can be passed as environment variables.
+my $script_dir = $info->script_dir();
+my $env_prefix = uc($info->host_name()) . '_';
+$env_prefix =~ tr/\./_/;	# dots in hostnames become underscores in env var names
+# Config::Abstraction returns nothing, rather than an object, when no file
+# matches the domain: a vhost that has not been given a config file yet, the
+# command line test in the POD, or CI, where the hostname is a container id.
+# That is not fatal, so the logger is built with no configuration and the
+# framework carries on with its defaults - dying here would take the site down
+# over a configuration file that is only there to describe it.  The reason is
+# reported once rather than on every request.
+my $config_abstraction = Config::Abstraction->new(env_prefix => $env_prefix, flatten => 0, config_file => $info->domain_name(), config_dirs => ["$script_dir/../conf/", "$script_dir/../../conf"]);
+my $logger = Log::Abstraction->new($config_abstraction ? $config_abstraction->all() : {});
+Log::WarnDie->dispatcher($logger);
+
+unless($config_abstraction) {
+	$logger->warn('No configuration file for ', ($info->domain_name() // '(unknown host)'), " in $script_dir/../conf/ or $script_dir/../../conf; using the defaults");
+}
+
+# my $pagename = "HTTP::VWF::Display::$script_name";
+# eval "require $pagename";
+
+# Loaded later, only when needed
+# use HTTP::VWF::Display::index;
+# use HTTP::VWF::Display::upload;
+# use HTTP::VWF::Display::editor;
+# use HTTP::VWF::Display::meta_data;
+
+# ── What a site declares, and what it gets if it declares nothing ───────────
+# The directory its databases are in, the data modules it loads, the languages
+# it offers and the addresses it allows or trusts are all site settings, read
+# from the domain's configuration file - see "Site Settings" in HTTP::VWF's
+# documentation.  What is below is what this script used to hardcode, so a site
+# that says nothing behaves exactly as it did before.  The settings are resolved
+# by site_setup() on the first request, because the configuration cannot be read
+# until the domain is known.
+Readonly my $DEFAULT_DATABASE_DIR => 'data';		# beside cgi-bin/
+Readonly my @DEFAULT_DATA_MODULES => qw(HTTP::VWF::Data::index);
+Readonly my @DEFAULT_SUPPORTED_LANGUAGES => qw(en-gb);
+# One site's own address, kept so that a site that came from this script and says
+# nothing keeps working; a site that wants a different list sets allow_ips.
+#
+# It is not called allowed_ips because that is a CGI::ACL constructor argument,
+# and CGI::ACL's new() runs the site's configuration through
+# Object::Configure::configure(), which hands a key of that name straight to it
+# as a string where a hash is expected, breaking the ACL outright.
+Readonly my @DEFAULT_ALLOW_IPS => qw(108.44.193.70 127.0.0.1);
+# Loopback and private addresses are exempt from rate limiting.
+Readonly my @DEFAULT_RATE_LIMIT_TRUSTED_IPS => qw(127.0.0.1 192.168.1.1);
+
+# The access log is the one data module this script builds itself, because which
+# log to read comes from the vwflog setting; its class is loaded here so that
+# doit() can construct it without a compile-time use.
+require_module('HTTP::VWF::Data::vwf_log');
+HTTP::VWF::Data::vwf_log->import() if(HTTP::VWF::Data::vwf_log->can('import'));
+
+# Resolved from the configuration by site_setup(): the directory holding the
+# site's databases, and the data handles it declared, by the name each is passed
+# to a page under (index, say).
+my $database_dir;
+my %data;
+
+# The lists from the configuration, likewise.
+my @supported_languages;
+my @rate_limit_trusted_ips;
+
+# 1 once site_setup() has run.  The configuration, the database directory, the
+# data handles and these lists last for the life of the process, not for one
+# request.
+my $site_ready;
+
+# $config is populated lazily inside doit() so that per-domain configuration
+# is loaded after the FCGI request has been accepted and the domain is known.
+my $config;
+
+# Reader for the CSV access log, used by the meta_data page.  Created in doit()
+# from the same path that vwflog() writes to, which needs $config.
+my $vwf_log;
+
+# The pages that may be loaded; worked out in doit() since it needs $config
+my @valid_pages;
+
+# FastCGI signal handling: the FCGI process lives across many requests so we
+# cannot exit immediately on SIGTERM/SIGUSR1 - we set a flag and exit cleanly
+# after the current request finishes.  See http://fastcgi.com/docs/faq.html#PerlSignals
+my $requestcount = 0;
+my $handling_request = 0;	# 1 while inside doit(), 0 between requests
+my $exit_requested = 0;		# set to 1 by sig_handler; checked after each request
+
+# In-memory set of IPs that have been permanently blacklisted this process
+# lifetime (e.g. for sending SQL-injection strings).
+my %blacklisted_ip;
+
+# Per-IP request counter cache; created lazily on first request.
+my $rate_limit_cache;
+
+# The CGI::ACL object is built on the first request, once $config is loaded,
+# because the country blacklist (HTTP::VWF::Blacklist) can come from the config file.
+my $acl;
 
 =head1 DESCRIPTION
 
@@ -180,455 +345,1061 @@ sub config
 	});
 }
 
-1;
-
-=head1 Keeping in step with VWF
-
-The modules here are VWF's own, renamed from C<VWF::> to C<HTTP::VWF::> and
-otherwise unchanged, so that a fix belongs in both.  VWF's development tree,
-complete with its own demo site, is at
-L<https://github.com/nigelhorne/vwf>.
-
-F<t/vwf-sync.t> is an author test that holds the two together.  It diffs each
-module here against its counterpart in a VWF checkout beside this one, with the
-namespace neutralised on both sides, and fails for anything this distribution
-has that VWF has not - a fix made here and not given upstream, or an older
-revision of a line VWF has since changed.  Lines VWF has and we have not are
-reported as a diagnostic rather than a failure, since that is a re-sync waiting
-to happen.  POD, blank lines and C<$VERSION> are ignored, which is what lets
-the two differ by their version numbers and their documentation.
-
-It skips unless C<AUTHOR_TESTING> is set, and skips again when no VWF checkout
-is found through C<$VWF_HOME> or C<../vwf>, so it does not run in CI and a CPAN
-install is unaffected.
-
-=head1 Compatibility with VWF
-
-VWF has a F<README> of its own, describing the framework in the terms its
-author uses for it.  Read it beside this one: it is the framework's own
-account of itself, and most of it is true of HTTP::VWF as it stands.
-
-Parts of it were written against an earlier design, though, and it does not
-always agree with the code it now ships with - in one place it does not agree
-with itself.  What follows is the two of them mapped, so that a reader working
-from the older document is not misled, and so that a difference is recorded
-here rather than left to be discovered.  Where the two disagree, the code is
-what runs.
-
-=head2 What that documentation describes, that HTTP::VWF does
-
-=over 4
-
-=item One FastCGI script, with access control and caching
-
-"The framework handles web requests using FastCGI", "the idea is to create
-page.fcgi", and "access control (including rate limiting), and caching".
-C<cgi-bin/page.fcgi> is that script; L<HTTP::VWF::Allow> is the access control
-and rate limiting, and C<FCGI::Buffer> the caching.
-
-=item The page that follows the browser
-
-"the correct index.htm (or index.tmpl) file based on the browser language
-setting (e.g. en-GB) and type (e.g. mobile)".  C<CGI::Lingua> gives the
-language and region, and C<HTTP::VWF::Display::_types()> the kind of client.
-"The fall back is web, so if a mobile browser visits and there is no specific
-mobile page to display then the web page will be displayed" is exactly how it
-behaves.
-
-=item The file extensions
-
-C<.tmpl> goes through the Template Toolkit, C<.html> and C<.htm> are sent as
-they are, and C<.txt> is sent as it is with a C<Content-Type> of C<text/plain>.
-All three behave as described.  C<.tt> is accepted as a second name for a
-Template Toolkit file, and an HTML response says C<charset=UTF-8> as well.
-
-=item C<root_dir>, and the configuration file named after the site
-
-"The name of the configuration file the sitename, e.g.
-/usr/lib/conf/example.com", and "root_dir /full/path/to/template directory".
-F<conf/example.com> in this distribution is that file, and C<root_dir> is the
-directory holding the site's F<templates/>, as described.
-
-F</usr/lib/conf/example.com> is one directory for every site the host serves,
-which is what this distribution changed: the server's own directory for a site
-is F</usr/lib/vwf/example.com>, one directory per site, named after it.  A site
-that keeps no F<conf/> of its own is configured from there, and a server that
-keeps its per-site directories somewhere else says so in
-C<< HTTP::VWF->new(directory => '/some/where') >> - see L</new>.
-
-Both the plain form the document shows and the XML form the example uses are
-read - C<Config::Abstraction> takes either, and it is the only reader the
-framework uses.  A site whose configuration is already written the old way does
-not have to be converted.
-Note that the snippet in the document is a description rather than a file to
-copy: it writes C<root_dir /path> with a space but C<memory_cache:> and
-C<disc_cache:> with colons, and a file mixing the two separators is liable to
-have the explanations taken as the values, or to be refused outright as not
-being in a format that can be read.
-
-F<t/config-format.t> holds this: it writes each form in a temporary directory
-and reads it back.
-
-The document's own FIXME - "Configuration files should be in .../conf, not
-.../lib/conf" - is honoured: a site's F<conf/> sits at the top of the search
-order, beside F<cgi-bin/>, and a setting in it is not overridden by a leftover
-copy of the file in one of the F<lib/conf> directories that predate it.  That is
-where C<page.fcgi> has always read the file, and L<HTTP::VWF::Display::table>
-reads it from there too: it used to look only in F<~/lib/conf>, which left a
-site declaring its C<root_dir> in F<conf/> and in F<~/lib/conf> both, and free to
-have the two disagree.
-
-=item Debugging from the command line
-
-C<perl -c -Ilib cgi-bin/page.fcgi>, C<--mobile>, C<--search-engine>,
-C<lang=fr>, C<key=value> and C<lint_content=0> all work as the document's
-"Usage" section shows.  The C<--mobile> and C<--search-engine> flags are
-CGI::Info's, read from C<@ARGV>, so they are available to any script that uses
-it.
-
-=item Data in the site's own directories
-
-"Data stored in the files .../databases/ ... CSV, XML and SQLite format files
-are supported."  There are two directories in play, and both are read.
-L<HTTP::VWF::Display::table> reads F<root_dir/databases/>, which is the
-F<.../databases/> the document names.  C<page.fcgi> separately opens the
-directory beside it - F<data/>, next to its own F<cgi-bin/> - through
-Database::Abstraction, and hands C<databasedir> to the template, which is what
-serves CSV, XML and SQLite.
-
-=item The F<save_to> caveat
-
-"Every time you upload a new site ensure that you remove the save_to
-directory, since that contains cached copies of pages that will be inconsistent
-with the new site."  Still true, and still worth doing: C<page.fcgi> keeps a
-day's worth of rendered pages under F<root_dir/save_to>.
-
-=back
-
-=head2 Where that documentation has moved on
-
-=over 4
-
-=item The shape of the template path
-
-The document gives the hierarchy as
-C<.../language/region/[web|mobile|robot|search]/filename.[html|tmpl|txt]>, and
-four paragraphs later shows it the other way round, as
-C<.../web/en/index.tmpl>.  The code searches both, the kind of client first:
-for each kind, C<< <kind>/<language>/<region> >>, then
-C<< <kind>/<language> >>, then C<< <language>/<kind> >>, then
-C<< <kind>/default >>, then C<< default/<kind> >>, then C<< <kind> >> alone,
-and finally the fall-back sequence C<web>, C<default/web>, C<default> and the
-templates directory itself.
-
-The filename is not the page's name either: the path ends with the page's own
-class path, so C<HTTP::VWF::Display::index> is sought as
-F<templates/en/web/HTTP/VWF/Display/index.tmpl>.  The worked example in the
-document, F<templates/VWF/index.html>, is from before pages gained the
-C<Display::> component, so it would now be
-F<templates/HTTP/VWF/Display/index.html>.
-
-C<ai> is a kind of client the document does not list: an AI crawler, which
-C<CGI::Info::is_ai()> recognises and which falls back to the C<robot> and
-C<search> templates before C<web>.  A search engine likewise falls back to
-C<robot>, and a robot to C<search>.
-
-=item One script, not one per page
-
-"You'll need to create cgi-bin files for each of your page sets (e.g. create
-foo.fcgi for .../web/*/*/foo.html) ... change the two places that VWF::index
-appear to VWF::foo."  That was the design when it was written, and the
-commented-out line that did it is still in C<page.fcgi>.  Now one C<page.fcgi>
-serves every page: the page is named by the C<page> parameter, and only those
-the configuration allows can be loaded.  A request that names no page at all is
-answered with a 300 listing the pages that may be asked for.
-
-=item Installing the framework
-
-"copy the contents of the lib directory to /usr/lib/VMF (or a place of your
-choice)" and "modify index.fcgi changing the 'use /usr/lib' directive"
-describe installing the framework into a site by hand.  That step is what this
-distribution replaces: HTTP::VWF is installed, and a site's C<use lib> line
-only has to reach the site's own page subclasses, if it has any.
-
-The C<lazy> step in the document's "Overview" is no longer needed either -
-nothing here uses C<lazy>, and the dependencies are declared in F<Makefile.PL>
-and F<cpanfile>.
-
-=item The logging configuration
-
-"Finally change conf/index.l4pconf to the logging mechanism of your choice."
-Logging is configured in the domain configuration file now, in the
-C<< <logger> >> section that Log::Abstraction reads, so this distribution ships
-no F<l4pconf> file: nothing would read it.
-
-=item The redirect
-
-The F<.htaccess> the document shows redirects C</index.html> to
-C</cgi-bin/index.fcgi>.  The script this distribution ships is
-C<cgi-bin/page.fcgi>; the document uses both names for it.
-
-=back
-
-=head2 What changes for a site that uses this distribution
-
-=over 4
-
-=item Every C<VWF::> is C<HTTP::VWF::>
-
-The document names C<VWF::Display>, C<VWF::Config>, C<VWF::Allow> and the rest,
-and a page subclasses C<VWF::Display>.  Here they are C<HTTP::VWF::Display>,
-C<HTTP::VWF::Config>, C<HTTP::VWF::Allow> and the rest, and a page writes
-C<< use parent 'HTTP::VWF::Display' >>.
-
-=item The template directory gains a level
-
-Because the page's class path is part of the template path,
-F<.../VWF/Display/> becomes F<.../HTTP/VWF/Display/>.
-
-=back
-
-=head1 Migrating a site from VWF
-
-A site that used VWF before this distribution existed carries its own copy of
-the modules on its C<@INC>, and a F<cgi-bin/page.fcgi> it has edited ever since.
-Moving it over is a change of module names, of where the configuration lives,
-and of which files the site still needs.  The steps can be taken one at a time,
-each checked before the next is started.
-
-=over 4
-
-=item 1. Install this distribution, and stop carrying VWF
-
-Remove the site's own copy of VWF from its C<@INC> - usually a F<lib/VWF/>
-directory among its modules - and install this distribution in its place:
-
-	cpanm HTTP::VWF
-
-Modules the site owns keep their names: a C<BBPortal::Display::news> is not
-VWF's, and does not move.
-
-=item 2. Rename the framework's namespace in the site's code
-
-Every C<VWF::> the site mentions becomes C<HTTP::VWF::>.  That is the C<use>
-lines in its page script (C<VWF::Allow>, C<VWF::Config>, C<VWF::Utils>,
-C<VWF::Data::vwf_log>, C<VWF::CAPTCHA>, C<VWF::Display::captcha> and the rest),
-the C<use parent> of each of its own page classes, and any class name built as a
-string - C<"VWF::Display::$page"> here is C<"HTTP::VWF::Display::$page">.
-
-=item 3. Move the framework's templates down one level
-
-The template path follows the class name, so F<templates/en/web/VWF/Display/>
-becomes F<templates/en/web/HTTP/VWF/Display/>.  The site's own page classes are
-unaffected: F<.../BBPortal/Display/> stays where it is.
-
-=item 4. Put the configuration in the site's own F<conf/>
-
-Move F<~/lib/conf/E<lt>domainE<gt>> - and anything under F</usr/lib/conf/>, the
-location VWF's own README names - to F<conf/E<lt>domainE<gt>> beside
-F<cgi-bin/>.  The file itself needs no editing: the plain C<key value> form the
-README shows and the XML form its example uses are both read from either
-location, by C<Config::Abstraction>.  F<conf/example.com> in this distribution
-is an example to copy.
-
-A site that does not own the machine it runs on - one of many virtual hosts on a
-server, whose F<conf/> is the server's to write - can leave the file where the
-server keeps the configuration of the sites it serves, in
-F</usr/lib/vwf/E<lt>sitenameE<gt>>, or under whichever root that server names with
-C<< HTTP::VWF->new(directory => ...) >>.  That directory is read below the site's
-own F<conf/>, and only from a name the request cannot talk its way out of, so
-what the site writes for itself still wins.
-
-The site's F<conf/> is searched first, so a setting in it cannot be overridden
-by an old copy left in F<~/lib/conf>.  Delete that copy anyway: VWF's own
-C<VWF::Config> merges those directories the other way round, and where it is
-still running a leftover file there wins.
-
-Do not bring per-port copies across.  A request whose C<Host> header carries a
-port, F<example.com:443>, is looked up under that name and then under
-F<example.com> beneath it, so one file serves every port the site is reached on.
-
-=item 5. Decide whether the site keeps its own page script
-
-=over 4
-
-=item * A site whose pages are all the framework's can take this distribution's
-F<cgi-bin/page.fcgi> as it stands.  Its databases, data modules, languages and
-addresses then come from the configuration file - see L</Site settings> - and it
-need not be edited to keep the behaviour it had, since each default is the value
-the old script carried.
-
-=item * A site with pages of its own keeps its script, because that is what
-loads them: C<BBPortal::Display::$page> is not something the shipped script
-knows about.  Rename the namespaces as in step 2 and leave the rest as it is.
-The settings in L</Site settings> reach a site only when its script asks for
-them; the C<config_list()> helper that reads them lives in F<page.fcgi> rather
-than in a module, so copy it, or read the configuration hash directly, if the
-site wants them.
-
-=back
-
-=item 6. Check the prerequisites, and anything the site had of its own
-
-Two modules are optional here although a VWF site may have installed them:
-F<Filesys::Df> and F<XML::LibXML>, neither of which builds everywhere - see
-L</Optional prerequisites>.  An existing throttle store carries over unchanged:
-it is the same YAML file, named by C<throttle-E<gt>{file}>, with C<max_items>
-and C<interval> as they were.  So does an access log named by C<vwflog>.
-
-=item 7. Run the site before it is deployed
-
-From the site's own F<cgi-bin>, the line the script's header gives:
-
-	LANG=en_GB root_dir=$(realpath $(pwd)/..) ./page.fcgi page=index
-
-C<root_dir> is the directory holding the site's F<templates/>, and it has to be
-absolute and free of C<..>: the framework refuses a template path containing
-C<../>, as a guard against a C<root_dir> that escapes the site.  C<realpath>
-resolves the C<..> the shell would otherwise leave in the value; run from the
-site's own directory instead, and C<root_dir=$(pwd)> is already resolved.
-
-The web server's configuration does not change, unless the site named its script
-F<index.fcgi> where this distribution names it F<page.fcgi>.
-
-=item 8. Keep the two in step
-
-A change made to one of the copied modules belongs in VWF as well.
-F<t/vwf-sync.t> fails for anything here that VWF has not got, which is what
-keeps the next site's migration a rename rather than a port - see
-L</Keeping in step with VWF>.
-
-=back
-
-=head1 Site settings
-
-A site describes itself in the configuration file named after its domain, in
-its own F<conf/> beside F<cgi-bin/>.  These are the settings this
-distribution's own F<cgi-bin/page.fcgi> reads; a site that adapts that script
-reads the same ones.
-
-Each has a default, and every default is the value that used to be written into
-the script - so a site that says nothing about a setting behaves exactly as it
-did before the setting existed.  F<t/site-config.t> holds the defaults in place,
-so one cannot drift unnoticed.
-
-=over 4
-
-=item C<database_dir>
-
-Where the site's databases are, as C<Database::Abstraction> reads them, and what
-a page is given as C<databasedir>.  Default: F<data/>, beside F<cgi-bin/>.
-
-=item C<data_modules>
-
-The data modules the site loads.  Each is loaded, constructed with C<< ->new() >>
-and given to every page under the last part of its name, lower-cased, so that a
-site's C<Bands::Data::bands> arrives at the page as C<bands>.  Default:
-C<HTTP::VWF::Data::index>, which is the handle L<HTTP::VWF::Display::index>
-needs.  The access log is not one of these: C<page.fcgi> builds its reader
-itself from the C<vwflog> setting, since it has to be told which log to read.
-
-=item C<supported_languages>
-
-The languages the site offers, for example C<en-gb fr>.  C<CGI::Lingua> negotiates
-within this list, so a language's templates are only reachable once it is listed.
-Default: C<en-gb>.
-
-=item C<allow_ips>
-
-Addresses allowed through the geo-block, passed to C<CGI::ACL>'s C<allow_ip()>.
-An address here is still refused if its reverse DNS says it is in a cloud range,
-and L<HTTP::VWF::Allow> has checks of its own that this does not bypass.  Default:
-C<108.44.193.70> and C<127.0.0.1>, the first being one site's own address, kept so
-that the sites this script came from keep working.  A site with an address of its
-own should set this.
-
-It is not called C<allowed_ips>, and cannot be: that is a C<CGI::ACL>
-constructor argument, and C<CGI::ACL>'s C<new()> runs the site's configuration
-through C<Object::Configure::configure()>, which would hand a key of that name to
-it as a string where a hash is expected - breaking access control outright.
-
-=item C<rate_limit_trusted_ips>
-
-Addresses exempt from rate limiting.  Default: C<127.0.0.1> and C<192.168.1.1> -
-loopback, and one private address.
-
-=item C<throttle>
-
-C<file> names the throttle store, C<max_items> is how many requests one address
-may make in C<interval> seconds, and both default to the values the framework
-has always used: a file called F<throttle> in the site's temporary directory,
-and 30 requests per 90 seconds.  A store that cannot be used is reported at
-error level and the request is served, rather than every visitor being refused
-for a fault of the server - see L<HTTP::VWF::Throttle>, in particular "WHEN THE
-STORE CANNOT BE USED".
-
-=item C<pages>
-
-The pages C<?page=> may load.  Without it, every C<Display/*.pm> shipped here may
-be loaded except C<captcha>.  See L<HTTP::VWF::Display>.
-
-=item C<blacklist_countries>
-
-The countries refused access.  See L<HTTP::VWF::Blacklist>.
-
-=item C<vwflog>
-
-Where the access log is written, and read back by the meta-data page.  Default:
-F<vwf.log> in the directory C<CGI::Info> reports as the log directory.
-
-=back
-
-A list-valued setting can be written as one string of values separated by commas
-or spaces, or as an element with one child per value, so that an XML
-configuration file can hold a list in whichever way reads better:
-
-	<allow_ips>108.44.193.70, 127.0.0.1</allow_ips>
-
-	<allow_ips>
-		<ip>108.44.193.70</ip>
-		<ip>127.0.0.1</ip>
-	</allow_ips>
-
-F<conf/example.com> carries each of these settings as a commented example.
-
-=head1 Optional prerequisites
-
-Two of the modules the framework can use are recommended rather than required,
-because neither can be installed everywhere and a site works without them:
-
-=over 4
-
-=item C<Filesys::Df>
-
-The disk usage figure on the meta-data page.  Its own F<Makefile.PL> refuses
-Windows - it prints "This module does not support Windows" and points at
-C<Filesys::DfPortable> - so this distribution does not declare it there at all.
-Requiring it would make C<cpanm --installdeps> fail and HTTP::VWF impossible to
-install on Windows.  Without it the meta-data page leaves the figure out.
-
-=item C<XML::LibXML>
-
-The parser L<HTTP::VWF::Allow> reads the DShield feed with.  It links against a
-system C<libxml2>, which Strawberry Perl does not ship, so it does not build on
-Windows either.  Without it L<HTTP::VWF::Allow> says once that it is skipping
-the feed and carries on; the checks after that point in the module still run,
-as they do when the feed cannot be downloaded.
-
-=back
-
-Everything else in F<Makefile.PL> is required on every platform.  Both of these
-are loaded when they are first needed rather than with C<use>, so neither is
-needed to install this distribution, and the test suite passes without them.
-
-=head1 LICENSE
-
-Licensed under GPL2.0 for personal use only.
-
-=head1 AUTHOR
-
-Nigel Horne, C<< <njh at nigelhorne.com> >>
-
-=cut
-
-1;
+# Deferred shutdown handler: set the exit flag and, if we are between requests,
+# flush caches and exit immediately.  If we are mid-request, the flag is checked
+# after doit() returns so the in-flight response is sent cleanly.
+sub sig_handler {
+	$exit_requested = 1;
+	$logger->trace('In sig_handler');
+	if(!$handling_request) {
+		$logger->info('Shutting down');
+		# Flush the page-level response cache to disk before we exit.
+		if($buffercache) {
+			$buffercache->purge();
+		}
+		CHI->stats->flush();
+		# Detach the dispatcher so that Log::WarnDie does not try to log
+		# after the logger object has been destroyed.
+		Log::WarnDie->dispatcher(undef);
+		exit(0);
+	}
+}
+
+# USR1 and TERM both trigger a clean shutdown; PIPE is silenced because a
+# broken client connection mid-response should not kill the worker.
+$SIG{USR1} = \&sig_handler;
+$SIG{TERM} = \&sig_handler;
+$SIG{PIPE} = 'IGNORE';
+
+# Catch all Perl warnings and mirror them to the per-script stderr log file
+# as well as to the structured logger.
+$SIG{__WARN__} = sub {
+	my $msg = join '', @_;
+	if(open(my $fout, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"))) {
+		print $fout $info->domain_name(), ": $msg";
+		close $fout;
+	}
+	$logger->warn($msg) if($logger);
+};
+
+# Catch fatal errors.  The $^S guard prevents this handler from interfering
+# with Error.pm's try/catch blocks which use eval internally.
+$SIG{__DIE__} = sub {
+	return if $^S;	# inside an eval - let the caller handle it
+	my $msg = join '', @_;
+	# Detach Log::WarnDie first so a logger error cannot cause infinite recursion.
+	Log::WarnDie->dispatcher(undef);
+	if(open(my $fout, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"))) {
+		print $fout $info->domain_name(), ": $msg";
+		close $fout;
+	}
+	$logger->fatal($msg) if($logger);
+	CORE::die @_;	# re-throw so the original die location is preserved
+};
+
+sub run
+{
+	my $self = shift;
+
+	# my $request = FCGI::Request($stdin, $stdout, $stderr);
+	my $request = FCGI::Request();
+
+	# ─── Main FCGI request loop ───────────────────────────────────────────────────
+	# Accept() blocks until the web server sends a new request.  It returns a
+	# negative value when the server wants this worker to exit (e.g. graceful
+	# shutdown), which breaks the loop naturally.
+	while($handling_request = ($request->Accept() >= 0)) {
+
+		# REMOTE_ADDR is absent when running from the command line for testing.
+		# Switch to a verbose debug logger and single-shot mode in that case.
+		unless($ENV{'REMOTE_ADDR'}) {
+			my $timer = Timer::Simple->new();
+
+			# Disable all caching so every run reflects the current templates.
+			$ENV{'NO_CACHE'} = 1;
+
+			# Map the LANG shell variable to the HTTP Accept-Language header so
+			# that language detection works the same way it does in production.
+			if((!defined($ENV{'HTTP_ACCEPT_LANGUAGE'})) && defined($ENV{'LANG'})) {
+				my $lang = $ENV{'LANG'};
+				$lang =~ s/\..*$//;	# strip encoding suffix (e.g. .UTF-8)
+				$lang =~ tr/_/-/;	# POSIX uses _, HTTP uses -
+				$ENV{'HTTP_ACCEPT_LANGUAGE'} = lc($lang);
+			}
+
+			Database::Abstraction::init({ logger => $logger });
+
+			# Replace the production logger with a simple STDOUT printer.
+			$logger = Log::Abstraction->new(logger => sub { print join(', ', @{$_[0]->{'message'}}), "\n" }, level => 'debug');
+			Log::WarnDie->dispatcher($logger);
+			$info->set_logger($logger);
+			set_data_loggers($logger);
+
+			# Enable full stack traces in Error.pm for command-line debugging.
+			$Error::Debug = 1;
+			try {
+				doit(debug => 1);
+			} catch Error with {
+				my $msg = shift;
+				warn "$msg\n", $msg->stacktrace();
+				$logger->error($msg);
+			};
+
+			# Report wall-clock time taken for this command-line invocation.
+			my @elapsed_time = $timer->hms();
+			my $timetaken = int($elapsed_time[2] * 1000);
+			$logger->info("$script_name completed in ${timetaken}ms");
+
+			last;	# command-line mode is single-shot; exit the accept loop
+		}
+
+		# ── Live HTTP request ──────────────────────────────────────────────────
+		$requestcount++;
+		$logger->info("Request $requestcount: ", $ENV{'REMOTE_ADDR'});
+
+		# Propagate the current logger to all data-access objects that may emit
+		# log messages during this request.
+		$info->set_logger($logger);
+		set_data_loggers($logger);
+
+		# Dispatch the request.  Any unhandled Error.pm exception is caught here
+		# so a single bad request cannot kill the FCGI worker process.
+		try {
+			doit(debug => 0);
+		} catch Error with {
+			my $msg = shift;
+			$logger->error("$msg: ", $msg->stacktrace());
+			# Invalidate the response cache on error so a stale error page is
+			# never served to subsequent clients.
+			if($buffercache) {
+				$buffercache->clear();
+				$buffercache = undef;
+			}
+		};
+
+		$request->Finish();
+
+		$handling_request = 0;
+		if($exit_requested) {
+			last;
+		}
+		if($ENV{SCRIPT_FILENAME}) {
+			if(-M $ENV{SCRIPT_FILENAME} < 0) {
+				last;
+			}
+		}
+	}
+}
+
+sub DESTROY
+{
+	# Clean up resources before shutdown
+	$logger->info('Shutting down');
+	if($buffercache) {
+		$buffercache->purge();
+	}
+	if($rate_limit_cache) {
+		# Memcached can't purge().
+		# I don't like this hardwired code, it would be better if I could find a way to determine if a driver can run purge()
+		$rate_limit_cache->purge() if($rate_limit_cache->short_driver_name() ne 'Memcached');
+	}
+	if($info_cache) {
+		$info_cache->purge();
+	}
+	if($lingua_cache) {
+		$lingua_cache->purge();
+	}
+	CHI->stats->flush();
+	Log::WarnDie->dispatcher(undef);
+}
+
+# ─── doit() — per-request handler ────────────────────────────────────────────
+# Called once per FCGI iteration.  Handles security checks, language detection,
+# template dispatch, response caching, and access logging.
+sub doit
+{
+	# Record the wall-clock start time so we can report request duration later.
+	my $request_start = Timer::Simple->new();
+
+	# CGI::Info caches state between calls; reset it so this request gets a
+	# fresh view of the environment rather than stale values from the last one.
+	CGI::Info->reset();
+
+	$logger->debug('In doit - domain is ', CGI::Info->domain_name());
+
+	my %params = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
+
+	# $config is built once per process and reused.  We cannot build it before
+	# the first Accept() because the domain name is not known until then.
+	# So don't pass $info in since it was created before the connection
+	$config ||= HTTP::VWF->new(
+		directory => $SERVER_CONF_DIR,
+		logger => $logger,
+		debug => $params{'debug'},
+		# A throwaway CGI::Lingua is used here only to satisfy HTTP::VWF::Config;
+		# the real, cache-backed instance is created further below.  It has to be
+		# given the default languages rather than the site's configured ones:
+		# this call is what reads the configuration, so the site's list is not
+		# known yet.
+		lingua => CGI::Lingua->new({ supported => [ @DEFAULT_SUPPORTED_LANGUAGES ], info => $info, logger => $logger })
+	)->config();
+
+	# The site's own settings - its database directory, data modules, languages
+	# and trusted addresses - are read from that configuration, once per process.
+	site_setup($config);
+
+	# deny_cloud() blocks all known cloud provider address ranges (AWS, GCP,
+	# Azure) which generate almost no legitimate human traffic but are a
+	# common origin for automated scanning.  Geo-blocking is a blunt
+	# instrument but effective at reducing noise.  It is also why an address a
+	# site allows here is still refused if its reverse DNS says it is in a cloud.
+	$acl ||= CGI::ACL->new()
+		->deny_cloud()
+		->deny_country(country => HTTP::VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->countries());
+
+	foreach my $ip (config_list($config, 'allow_ips', @DEFAULT_ALLOW_IPS)) {
+		$acl->allow_ip($ip);
+	}
+
+	@valid_pages = valid_pages($config) unless(@valid_pages);
+
+	# The CGI::Info disc cache stores parsed request data across FCGI restarts.
+	$info_cache ||= create_disc_cache(config => $config, logger => $logger, namespace => 'CGI::Info');
+
+	my $options = {
+		cache => $info_cache,
+		logger => $logger
+	};
+
+	# If syslog is configured, normalise the 'server' key to 'host' (the
+	# Sys::Syslog convention) and pass the stanza to CGI::Info.
+	my $syslog;
+	if($syslog = $config->syslog()) {
+		if($syslog->{'server'}) {
+			$syslog->{'host'} = delete $syslog->{'server'};
+		}
+		$options->{'syslog'} = $syslog;
+	}
+	# Rebuild $info now that we have a cache and the domain is known.
+	$info = CGI::Info->new($options);
+
+	# Lazily initialise the in-memory rate-limit counter store.
+	$rate_limit_cache ||= create_memory_cache(config => $config, logger => $logger, namespace => 'rate_limit');
+
+	# Use the real remote IP as the rate-limit key; fall back to 'unknown'
+	# only in the unlikely event that REMOTE_ADDR is absent.
+	my $client_ip = $ENV{'REMOTE_ADDR'} || 'unknown';
+
+	# A successful CAPTCHA solve stores a short-lived bypass token in the cache.
+	# While the token is present the client is exempt from rate-limit checks.
+	my $captcha_bypass_key = "$script_name:captcha_bypass:$client_ip";
+	my $has_captcha_bypass = $rate_limit_cache->get($captcha_bypass_key);
+
+	# Read the current request count for this IP from the sliding-window cache.
+	my $request_count = $rate_limit_cache->get("$script_name:rate_limit:$client_ip") || 0;
+
+	# Allow the thresholds to be tuned via the config file; fall back to the
+	# compile-time constants if the stanza is missing.
+	my $max_requests = $config->{'security'}->{'rate_limiting'}->{'max_requests'} || $MAX_REQUESTS;
+	my $max_requests_hard = $config->{'security'}->{'rate_limiting'}->{'max_requests_hard'} || ($max_requests * 1.5);
+
+	# The rate-limit window, as a CHI duration for the counter's TTL, and in
+	# seconds for the Retry-After header (RFC 9110 section 10.2.3)
+	my $time_window = $config->{'security'}->{'rate_limiting'}->{'time_window'} || $TIME_WINDOW;
+	my $retry_after = duration_seconds($time_window);
+
+	# Check if this is a CAPTCHA verification attempt
+	if ($info->param('g-recaptcha-response')) {
+		unless(HTTP::VWF::CAPTCHA->can('new')) {
+			require HTTP::VWF::CAPTCHA;
+			HTTP::VWF::CAPTCHA->import();
+		}
+
+		my $recaptcha_config = $config->recaptcha();
+		if ($recaptcha_config && $recaptcha_config->{enabled}) {
+			my $captcha = HTTP::VWF::CAPTCHA->new(
+				site_key => $recaptcha_config->{site_key},
+				secret_key => $recaptcha_config->{secret_key},
+				logger => $logger
+			);
+
+			if ($captcha->verify($info->param('g-recaptcha-response'), $client_ip)) {
+				# CAPTCHA verified - grant bypass
+				my $bypass_duration = $config->{'security'}->{'rate_limiting'}->{'captcha_bypass_duration'} || '300s';
+				$rate_limit_cache->set($captcha_bypass_key, 1, $bypass_duration);
+				$rate_limit_cache->set("$script_name:rate_limit:$client_ip", 0, '60s'); # Reset counter
+
+				$logger->info("CAPTCHA verified for $client_ip - rate limit bypass granted");
+				$has_captcha_bypass = 1;
+
+				# Redirect the client back to the page they were trying to reach.
+				# SECURITY - CRLF / header-injection defence:
+				#   Both the page name and SCRIPT_NAME are interpolated into the
+				#   Location header.  A raw %0d%0a sequence in either value would
+				#   let an attacker inject arbitrary HTTP response headers
+				#   (response-splitting / header-injection).
+				#   Strip $redirect_page to a strict allowlist (word chars and
+				#   hyphens only), and remove any embedded CR or LF from the
+				#   server-supplied SCRIPT_NAME before building the header.
+				my $redirect_page = $info->param('page') || 'index';
+				$redirect_page =~ s/[^A-Za-z0-9_-]//g;
+
+				# Also sanitize the server variable - it is attacker-influenced
+				# in some reverse-proxy configurations.
+				my $script = $ENV{SCRIPT_NAME} // '/cgi-bin/page.fcgi';
+				$script =~ s/[\r\n]//g;
+
+				$info->status(302);
+				print "Status: 302 Found\r\n",
+					"Location: ${script}?page=${redirect_page}\r\n\r\n";
+				return;
+			} else {
+				$logger->warn("CAPTCHA verification failed for $client_ip");
+				# Fall through to show CAPTCHA again
+			}
+		}
+	}
+
+	$vwflog ||= $config->vwflog() || File::Spec->catfile($info->logdir(), 'vwf.log');
+	$vwf_log ||= HTTP::VWF::Data::vwf_log->new({
+		directory => dirname($vwflog),
+		filename => basename($vwflog),
+		no_entry => 1,
+		logger => $logger,
+	});
+	my $log = Class::Simple->new();
+
+	# Stores things for a month or longer
+	$lingua_cache ||= create_disc_cache(config => $config, logger => $logger, namespace => 'CGI::Lingua');
+
+	# Language negotiation, offering the languages this site offers
+	my $lingua = CGI::Lingua->new({
+		supported => \@supported_languages,
+		cache => $lingua_cache,
+		info => $info,
+		logger => $logger,
+		debug => $params{'debug'},
+		syslog => $syslog,
+	});
+
+	my $cachedir = $params{'cachedir'} || $config->{disc_cache}->{root_dir} || File::Spec->catfile($tmpdir, 'cache');
+
+	# Rate limit by IP (unless bypassed)
+	unless($has_captcha_bypass || grep { $_ eq $client_ip } @rate_limit_trusted_ips) {
+		if ($request_count >= $max_requests_hard) {
+			# Hard limit exceeded - show CAPTCHA with warning
+			my $recaptcha_config = $config->recaptcha();
+
+			if ($recaptcha_config && $recaptcha_config->{enabled}) {
+				$logger->warn("Hard rate limit exceeded for $client_ip ($request_count requests)");
+				$info->status(429);
+
+				unless(HTTP::VWF::Display::captcha->can('new')) {
+					require HTTP::VWF::Display::captcha;
+					HTTP::VWF::Display::captcha->import();
+				}
+				my $display = HTTP::VWF::Display::captcha->new({
+					cachedir => $cachedir,
+					info => $info,
+					logger => $logger,
+					lingua => $lingua,
+					config => $config,
+				});
+
+				print 'Status: 429 ', HTTP::Status::status_message(429), "\n";
+				print $display->as_string({
+					'Retry-After' => $retry_after,
+					Retry_After => $retry_after,
+					hard_block => 1,
+					request_count => $request_count,
+				});
+
+				vwflog($vwflog, $info, $lingua, $syslog, 'Hard rate limit - CAPTCHA shown', $log, $request_start);
+				return;
+			}
+
+			# No CAPTCHA to offer, so block until the window expires
+			$logger->warn("Hard rate limit exceeded for $client_ip ($request_count requests)");
+			send_error(status => 429, body => "Too many requests - try again later\n", headers => "Retry-After: $retry_after\n");
+			vwflog($vwflog, $info, $lingua, $syslog, 'Hard rate limit', $log, $request_start);
+			return;
+		} elsif ($request_count >= $max_requests) {
+			# Soft limit exceeded - show CAPTCHA
+			my $recaptcha_config = $config->recaptcha();
+
+			if ($recaptcha_config && $recaptcha_config->{enabled}) {
+				$logger->info("Soft rate limit exceeded for $client_ip ($request_count requests) - CAPTCHA challenge issued");
+				$info->status(429);
+
+				unless(HTTP::VWF::Display::captcha->can('new')) {
+					require HTTP::VWF::Display::captcha;
+					HTTP::VWF::Display::captcha->import();
+				}
+				my $display = HTTP::VWF::Display::captcha->new({
+					cachedir => $cachedir,
+					info => $info,
+					logger => $logger,
+					lingua => $lingua,
+					config => $config,
+				});
+
+				print $display->as_string({
+					'Retry-After' => $retry_after,
+					Retry_After => $retry_after,
+					hard_block => 0,
+					request_count => $request_count,
+				});
+
+				vwflog($vwflog, $info, $lingua, $syslog, 'Soft rate limit - CAPTCHA shown', $log, $request_start);
+				return;
+			}
+		}
+	}
+
+	# Commit the incremented request count back to the sliding-window cache.
+	# The TTL is the rate-limit window; the counter expires automatically.
+	$rate_limit_cache->set("$script_name:rate_limit:$client_ip", $request_count + 1, $time_window);
+
+	# A request with no page parameter cannot be dispatched; send a 300
+	# response listing the known valid pages instead.
+	if(!defined($info->param('page'))) {
+		$logger->info('No page given in ', $info->as_string());
+		choose();
+		return;
+	}
+
+	# ── Multi-layer access control ─────────────────────────────────────────
+	# Three independent checks are run in order of cheapness:
+	#   1. CGI::ACL — cloud ranges, country blocks, explicit IP allow/deny.
+	#   2. blacklisted() — in-process IP set built from prior SQL-injection attempts.
+	#   3. HTTP::VWF::Allow — DShield feed, user-agent blacklist, throttler, IDS.
+	if(my $remote_addr = $ENV{'REMOTE_ADDR'}) {
+		my $reason;
+		if($acl->all_denied(lingua => $lingua)) {
+			$reason = 'Denied by CGI::ACL';
+		} elsif(blacklisted($info)) {
+			$reason = 'Blacklisted for attempting to break in';
+		} else {
+			# HTTP::VWF::Allow may throw an Error object when it blocks a request.
+			# Catch it here so the 403 response is sent rather than propagating.
+			try {
+				unless(HTTP::VWF::Allow::allow({
+					info   => $info,
+					lingua => $lingua,
+					logger => $logger,
+					cache  => $rate_limit_cache,
+					config => $config,
+				})) {
+					$reason = 'Blocked by HTTP::VWF::Allow';
+				}
+			} catch Error with {
+				$reason = shift;
+			};
+		}
+		if($reason) {
+			# Return a minimal plain-text 403 - no template rendering so that
+			# a blocked attacker receives no information about site structure.
+			send_error(status => 403, body => "Access Denied\n");
+			$logger->info("$remote_addr: access denied: $reason");
+			$info->status(403);
+			vwflog($vwflog, $info, $lingua, $syslog, $reason, $log, $request_start);
+			return;
+		}
+	}
+
+	# ── FCGI::Buffer setup ────────────────────────────────────────────────
+	# FCGI::Buffer post-processes the output: compresses it, generates an ETag
+	# and Last-Modified header, and serves a 304 Not Modified when appropriate.
+	my $args = {
+		generate_etag => 1,
+		generate_last_modified => 1,
+		compress_content => 1,
+		generate_304 => 1,
+		info => $info,
+		optimise_content => 1,
+		logger => $logger,
+		# lint_content runs HTML::Tidy on the output; enable in debug mode or
+		# when explicitly requested via the lint_content query parameter.
+		lint_content => $info->param('lint_content') // $params{'debug'},
+		lingua => $lingua
+	};
+
+	if((!$info->is_search_engine()) && $config->root_dir() &&
+	   ($info->param('page') ne 'home') &&
+	   ((!defined($info->param('action'))) || ($info->param('action') ne 'send'))) {
+		$args->{'save_to'} = {
+			directory => File::Spec->catfile($config->root_dir(), 'save_to'),
+			ttl => 3600 * 24,
+			create_table => 1
+		};
+	}
+
+	my $fb = FCGI::Buffer->new()->init($args);
+
+	if($fb->can_cache()) {
+		my $cache_key = join('/',
+			'FCGI::Buffer',
+			$info->browser_type(),
+			$info->domain_name(),
+			$script_name,
+			$info->as_string(),
+			$lingua->language()
+		);
+		$cache_key =~ s/;string=%5Bobject%20HTMLInputElement%5D//;
+		$cache_key =~ s/;string=\[object HTMLInputElement\]//;
+		if($info->param('location')) {
+			$cache_key .= '/' . $info->param('location');
+		}
+		$logger->debug("enabling cache key $cache_key");
+
+		$buffercache ||= create_disc_cache(config => $config, logger => $logger, namespace => $script_name, root_dir => $cachedir);
+		$fb->init(
+			cache_key => $cache_key,
+			cache => $buffercache,
+			# generate_304 => 0,
+			cache_duration => '1 day',
+		);
+		if($fb->is_cached()) {
+			return;
+		}
+	}
+
+	# $display holds the instantiated HTTP::VWF::Display subclass when the page is
+	# found; $invalidpage is set when the page name is invalid or unloadable.
+	my $display;
+	my $invalidpage;
+
+	# Arguments forwarded to every HTTP::VWF::Display subclass constructor.  The
+	# server's directory is among them because a page reads its configuration for
+	# itself, and has to look where this script did.
+	$args = {
+		cachedir => $cachedir,
+		info => $info,
+		logger => $logger,
+		lingua => $lingua,
+		config => $config,
+		server_directory => $SERVER_CONF_DIR,
+		log => $log
+	};
+
+	# ── Page dispatch ──────────────────────────────────────────────────────
+	# The outer block eval catches any exception thrown during module loading
+	# or display-object construction, setting $@ for inspection below.
+	eval {
+		my $page = $info->param('page');
+
+		# Strip URL fragment identifiers - the server never needs them.
+		$page =~ s/#.*$//;
+
+		# Reject backslashes: no legitimate page name contains one, and
+		# they have historically been used to probe Windows path traversal.
+		$page =~ s/\\//g;
+
+		if($page =~ /\//) {
+			# A slash in the page name indicates an attempt to traverse
+			# directories (e.g. page=/etc/passwd or page=http://evil.com).
+			$logger->info("Blocking '/' in $page");
+			$info->status(403);
+			$log->status(403);
+			$invalidpage = 1;
+		} else {
+			# Strip every non-word character so that the page name can only
+			# contain [A-Za-z0-9_] - safe to use as a Perl package suffix.
+			$page =~ s/\W//g;
+			$page =~ s/\s//g;
+		}
+
+		if($invalidpage) {
+			# Already rejected above
+		} elsif(!grep { $_ eq $page } @valid_pages) {
+			# Only pages on the allow-list are loaded, so that no other
+			# HTTP::VWF::Display::* module that happens to be on @INC (e.g. under
+			# ~/lib/perl5) can be reached from the query string.
+			$logger->info("Unknown page $page");
+			$invalidpage = 1;
+			if($info->status() == 200) {
+				$info->status(404);
+			}
+		} else {
+			my $display_module = "HTTP::VWF::Display::$page";
+
+			$logger->debug("doit(): Loading module $display_module from @INC");
+			unless($display_module->can('new')) {
+				# String-eval elimination:
+				#   The original code used eval "require $display_module" which is a
+				#   string eval on a user-derived value.  Although $page has been
+				#   stripped of \W characters, a Unicode or locale edge-case could
+				#   allow a bypass.  Module::Runtime::require_module() loads a module
+				#   by name using a block eval internally, with no string-eval surface.
+				eval { require_module($display_module) };
+				$display_module->import() unless $@;
+			}
+			if($@) {
+				$logger->debug("Failed to load module $display_module: $@");
+				$logger->info("Unknown page $page");
+				$invalidpage = 1;
+				if($info->status() == 200) {
+					$info->status(404);
+				}
+			} else {
+				# use Class::Inspector;
+				# my $methods = Class::Inspector->methods($display_module);
+				# print "$display_module exports ", join(', ', @{$methods}), "\n";
+				$display = do {
+					eval { $display_module->new($args) };
+				};
+				if(!defined($display)) {
+					if($@) {
+						$logger->warn("$display_module->new(): $@");
+					} else {
+						$logger->notice("Can't instantiate page $page");
+					}
+					$invalidpage = 1;
+					if($info->status() == 200) {
+						$info->status(404);
+					}
+				} elsif(!$display->can('as_string')) {
+					$logger->warn("Problem understanding $page");
+					undef $display;
+				}
+			}
+		}
+	};
+
+	my $error = $@;
+	if($error) {
+		if($info->status() == 429) {
+			$logger->notice($error);
+		} else {
+			$logger->error($error);
+		}
+		$display = undef;
+	}
+
+	if(defined($display)) {
+		# Pass in handles to the databases: the site's own data handles, under
+		# the name each was declared with, and the access log, which the
+		# framework reads from the log it writes.
+		print $display->as_string({
+			cachedir => $cachedir,
+			config => $config,
+			databasedir => $database_dir,
+			database_dir => $database_dir,
+			%data,
+			vwf_log => $vwf_log,
+		});
+		vwflog($vwflog, $info, $lingua, $syslog, '', $log, $request_start);
+	} elsif($invalidpage) {
+		if($info->status() == 429) {
+			# Throttled by HTTP::VWF::Display
+			my $interval = $config->{'throttle'}->{'interval'} // 90;
+			send_error(status => 429, body => "Too many requests - try again later\n", headers => "Retry-After: $interval\n", buffered => 1);
+			vwflog($vwflog, $info, $lingua, $syslog, 'Throttled', $log, $request_start);
+		} else {
+			choose();
+			vwflog($vwflog, $info, $lingua, $syslog, 'Unknown page', $log, $request_start);
+		}
+		return;
+	} else {
+		$logger->debug('disabling cache');
+		$fb->init(
+			cache => undef,
+		);
+		# Handle errors gracefully
+		my ($status, $body);
+		if($error eq 'Unknown page to display') {
+			($status, $body) = (400, "I don't know what you want me to display.\n");
+		} elsif($error =~ /Can\'t locate .* in \@INC/) {
+			$logger->error($error);
+			($status, $body) = (500, "Software error - contact the webmaster\n");
+		} elsif(($info->status() == 200) || ($info->status() == 403)) {
+			# No permission to show this page
+			($status, $body) = (403, "Access Denied\n");
+		} else {
+			$status = $info->status();
+			$body = "Page unavailable - something is wrong at your end, please fix and try again\n";
+		}
+		send_error(status => $status, body => $body, buffered => 1);
+		$log->status($status);
+		vwflog($vwflog, $info, $lingua, $syslog, $error ? $error : 'Access denied', $log, $request_start);
+		throw Error::Simple($error ? $error : $info->as_string());
+	}
+}
+
+# Send a 300 Multiple Choices response listing the pages this site serves.
+# Called when the ?page= parameter is absent or the requested page is unknown.
+sub choose
+{
+	$logger->info('Called with no page to display');
+
+	my $status = $info->status();
+
+	# If the status is already non-200 (e.g. 404 set by the caller), relay
+	# that status rather than overriding it with a 300.  That only happens
+	# for an invalid page, after FCGI::Buffer has been set up, and it sends
+	# the Status line from $info->status() itself.
+	return if($status != 200);
+
+	print "Status: 300 Multiple Choices\n",
+		"Content-type: text/plain\n";
+
+	$info->status(300);
+
+	# Include a Last-Modified header based on the script's mtime so that
+	# caches and conditional-GET clients can revalidate efficiently.
+	if(my $path = $info->script_path()) {
+		require HTTP::Date;
+		HTTP::Date->import();
+
+		my @statb = stat($path);
+		my $mtime = $statb[9];
+		print 'Last-Modified: ', HTTP::Date::time2str($mtime), "\n";
+	}
+
+	print "\n";
+
+	# RFC 7231 §4.3.2: a HEAD response must not include a body.
+	unless($ENV{'REQUEST_METHOD'} && ($ENV{'REQUEST_METHOD'} eq 'HEAD')) {
+		# The same list that doit() allows, so the two cannot differ
+		print map { "/cgi-bin/page.fcgi?page=$_\n" } @valid_pages;
+	}
+}
+
+# Send a short plain-text error response, and record its status in $info.
+#	status - the HTTP status code
+#	body - the text to send (not sent for HEAD)
+#	headers - optional extra header lines, each ending in "\n", e.g. Retry-After
+#	buffered - true once FCGI::Buffer is capturing the output.  It sends the
+#		Status line from $info->status(), so it mustn't be printed here too.
+sub send_error
+{
+	my %args = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
+	my $status = $args{'status'};
+
+	$info->status($status);
+
+	print 'Status: ', $status, ' ', HTTP::Status::status_message($status), "\n" unless($args{'buffered'});
+	print $args{'headers'} // '',
+		"Content-type: text/plain\n",
+		"Pragma: no-cache\n\n";
+
+	# RFC 9110 §9.3.2: a HEAD response must not include a body.
+	my $is_head = $ENV{'REQUEST_METHOD'} && ($ENV{'REQUEST_METHOD'} eq 'HEAD');
+	print $args{'body'} if(defined($args{'body'}) && !$is_head);
+
+	return 1;
+}
+
+# A list-valued setting: what the configuration file says about it, or the
+# caller's defaults when it says nothing about it.  A list can be written as one
+# string of values separated by commas or spaces, which is what the plain form
+# of a configuration file gives, or as an element with one child per value,
+# which is what an XML file gives; both are read, so an XML file can hold a list
+# in whichever of the two ways reads better.  The values are returned as they
+# were written and in the order they were written, with repetitions dropped, and
+# a setting that is present but empty means no values at all - so that a site can
+# say "none" as well as saying nothing.
+sub config_list
+{
+	my ($config, $key, @defaults) = @_;
+
+	my $value = $config->{$key};
+	return @defaults unless(defined($value));
+
+	my @values;
+	if(ref($value) eq 'HASH') {
+		# One child per value; the names of the children are not used
+		foreach my $child (values %{$value}) {
+			push(@values, ref($child) eq 'ARRAY' ? @{$child} : $child);
+		}
+	} elsif(ref($value) eq 'ARRAY') {
+		@values = @{$value};
+	} else {
+		@values = split /[\s,]+/, $value;
+	}
+
+	my %seen;
+	return grep { defined($_) && length($_) && !$seen{$_}++ } @values;
+}
+
+# The pages that ?page= may load.  Sites can list them in the config file
+# (<pages>index, meta_data</pages>); otherwise every ../lib/HTTP/VWF/Display/*.pm
+# next to this script is allowed, except captcha, which only the rate limiter
+# shows.
+sub valid_pages
+{
+	my $config = shift;
+
+	my @pages = config_list($config, 'pages');
+	return grep { /\A\w+\z/ } @pages if(@pages);
+
+	my $dir = File::Spec->catdir($script_dir, File::Spec->updir(), 'lib', 'HTTP', 'VWF', 'Display');
+	return sort(grep { $_ ne 'captcha' } map { basename($_, '.pm') } glob(File::Spec->catfile($dir, '*.pm')));
+}
+
+# Read the settings this site declares, once per process, and act on them: open
+# the database directory it names, load the data modules it names and give the
+# pages the languages and addresses it names.  Everything left unsaid keeps the
+# default it had when these values were written into this script.
+sub site_setup
+{
+	my $config = shift;
+
+	return if($site_ready);
+	$site_ready = 1;
+
+	# Where the site's own databases are.  Database::Abstraction reads them, and
+	# the pages are told the directory as databasedir and database_dir.
+	$database_dir = $config->{'database_dir'}
+		|| File::Spec->catdir($script_dir, File::Spec->updir(), $DEFAULT_DATABASE_DIR);
+	$logger->debug('Reading databases from ', $database_dir);
+
+	Database::Abstraction::init({
+		cache => CHI->new(driver => 'Memory', datastore => {}),
+		cache_duration => '1 day',
+		directory => $database_dir,
+		logger => $logger
+	});
+
+	# The languages the site offers.  CGI::Lingua negotiates within this list, so
+	# listing a language is what makes that language's templates reachable.
+	@supported_languages = config_list($config, 'supported_languages', @DEFAULT_SUPPORTED_LANGUAGES);
+
+	# Addresses exempt from rate limiting
+	@rate_limit_trusted_ips = config_list($config, 'rate_limit_trusted_ips', @DEFAULT_RATE_LIMIT_TRUSTED_IPS);
+
+	# The site's data modules.  Each is loaded, constructed with ->new() and
+	# given to every page under the last part of its name, lower-cased:
+	# HTTP::VWF::Data::index arrives at a page as index, and a site's own
+	# Bands::Data::bands as bands.
+	foreach my $module (config_list($config, 'data_modules', @DEFAULT_DATA_MODULES)) {
+		my $handle;
+		eval {
+			require_module($module);
+			$module->import() if($module->can('import'));
+			$handle = $module->new();
+		};
+		if(!defined($handle)) {
+			# A module the site named that cannot be loaded is reported and
+			# skipped rather than taking the site down: it is a setting now, so
+			# getting it wrong should not stop the pages that do not need it.
+			$logger->error("Can't load data module $module: $@");
+			next;
+		}
+
+		my $name = lc((split(/::/, $module))[-1]);
+		$handle->set_logger($logger) if($handle->can('set_logger'));
+		$data{$name} = $handle;
+		$logger->debug("Data module $module is available to pages as \$$name");
+	}
+
+	return 1;
+}
+
+# Give the current logger to every data handle.  This runs before each request,
+# since command-line mode replaces the logger; the handles themselves are made
+# once, by site_setup().
+sub set_data_loggers
+{
+	my $logger = shift;
+
+	foreach my $handle (values %data) {
+		$handle->set_logger($logger) if($handle->can('set_logger'));
+	}
+	$vwf_log->set_logger($logger) if($vwf_log);
+}
+
+# Convert a CHI-style duration ('60s', '2 minutes', '90') to whole seconds
+sub duration_seconds
+{
+	my $duration = shift;
+
+	return $duration if($duration =~ /\A\d+\z/);
+
+	require Time::Duration::Parse;
+
+	my $seconds = eval { Time::Duration::Parse::parse_duration($duration) };
+	if(!defined($seconds)) {
+		$logger->warn("Can't parse duration '$duration', using 60 seconds");
+		return 60;
+	}
+	return int($seconds);
+}
+
+# Check whether the current request looks like a SQL injection attempt.
+# IPs that trigger a match are added to the in-process %blacklisted_ip set so
+# that subsequent requests from the same IP are rejected without re-scanning.
+sub blacklisted
+{
+	if(my $remote = $ENV{'REMOTE_ADDR'}) {
+		my $info = shift;
+
+		# Fast path: this IP was already blacklisted earlier in this process
+		# lifetime; no need to re-scan the request string.
+		if($blacklisted_ip{$remote}) {
+			$info->status(403);
+			return 1;
+		}
+
+		if(my $string = $info->as_string()) {
+			# Hard length cap: skip pattern matching entirely on absurdly long
+			# inputs.  Even bounded quantifiers like {1,200} iterate many times
+			# across a 1 MB string, so cap before we run any regex.
+			return 0 if length($string) > 8192;
+
+			# SECURITY - ReDoS defence:
+			#   The original patterns used greedy .+ between SQL keywords, which
+			#   causes catastrophic (exponential) backtracking when an attacker
+			#   sends a string that contains the opening keyword but not the
+			#   closing one (e.g. thousands of chars after SELECT with no AND).
+			#   All .+ quantifiers are replaced with the bounded class [^;]{0,N}:
+			#     - the semicolon is a natural SQL statement terminator so it is
+			#       a safe anchor that real SQL injection never crosses, and
+			#     - the explicit upper bound caps backtracking to O(N) steps.
+			#   Word-boundary assertions (\b) also eliminate false positives on
+			#   ordinary words that happen to contain the substring.
+			if(   ($string =~ /SELECT\b[^;]{0,500}\bAND\b/i)
+			   || ($string =~ /ORDER\s+BY\s/i)
+			   || ($string =~ /\bOR\s+NOT\b/i)
+			   || ($string =~ /\bAND\s+\d+=\d+/i)
+			   || ($string =~ /\bTHEN\b[^;]{0,200}\bELSE\b[^;]{0,200}\bEND\b/i)
+			   || ($string =~ /\bAND\b[^;]{0,200}\bSELECT\b/i)
+			   || ($string =~ /\sAND\s[^;]{0,100}\sAND\s/i)
+			   || ($string =~ /\bAND\s+CASE\s+WHEN\b/i)) {
+				$blacklisted_ip{$remote} = 1;
+				$info->status(403);
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+# False positives we don't need in the logs
+sub filter
+{
+	# return 0 if($_[0] =~ /Can't locate Net\/OAuth\/V1_0A\/ProtectedResourceRequest.pm in /);
+	# return 0 if($_[0] =~ /Can't locate auto\/NetAddr\/IP\/InetBase\/AF_INET6.al in /);
+	# return 0 if($_[0] =~ /S_IFFIFO is not a valid Fcntl macro at /);
+
+	return 0 if $_[0] =~ /Can't locate (Net\/OAuth\/V1_0A\/ProtectedResourceRequest\.pm|auto\/NetAddr\/IP\/InetBase\/AF_INET6\.al) in |S_IFFIFO is not a valid Fcntl macro at /;
+	return 1;
+}
+
+# Escape a single value for safe inclusion in a double-quoted CSV field.
+# Follows RFC 4180 §2.7 and additionally neutralises spreadsheet formulas.
+sub _csv_escape
+{
+	my $v = shift // '';
+
+	# RFC 4180: a double-quote inside a quoted field is represented by two
+	# double-quote characters.  Without this, one embedded " would break the
+	# column boundary and corrupt every subsequent field on the row.
+	$v =~ s/"/""/g;
+
+	# SECURITY - CSV formula injection defence:
+	#   Spreadsheet applications (Excel, LibreOffice Calc) interpret cell values
+	#   that begin with = + - @ TAB or CR as formulas.  An attacker who controls
+	#   a logged field (e.g. the page parameter) could inject =cmd|'/C calc'!A0.
+	#   Prefix such values with a single-quote to force literal interpretation.
+	$v =~ s/^([=+\-@\t\r])/'$1/;
+
+	return $v;
+}
+
+# Write one access record to vwf.log (CSV format) and optionally to syslog.
+# All user-influenced fields are escaped through _csv_escape before output.
+sub vwflog
+{
+	my ($vwflog, $info, $lingua, $syslog, $message, $log, $request_start) = @_;
+
+	# Calculate request duration in milliseconds if a start timer was supplied.
+	my $duration_ms = '';
+	if($request_start) {
+		$duration_ms = int((Time::HiRes::time() - $request_start) * 1000);
+	}
+
+	# Determine which template was rendered for this request (may be empty on error).
+	my $template;
+	if($log) {
+		$template = $log->template();
+	}
+	if(!defined($template)) {
+		$template = '';
+	}
+	$message ||= '';
+
+	# Create the log file with a header row on first use.
+	if(!-e $vwflog) {
+		open(my $fout, '>', $vwflog);
+		print $fout '"domain_name","time","IP","country","type","language","http_code","template","args","messages","error","duration_ms"',
+			"\n";
+		close $fout;
+	}
+
+	# Collect any warn/notice-level messages emitted during this request.
+	my $warnings;
+        if(my $messages = $info->messages()) {
+                $warnings = join('; ',
+                        grep defined, map { (($_->{'level'} eq 'warn') || ($_->{'level'} eq 'notice')) ? $_->{'message'} : undef } @{$messages}
+                        )
+        }
+	$warnings ||= '';
+
+	my $country = $lingua->country() || 'unknown';
+
+	# Open the log in append mode.  If the open fails we skip logging silently
+	# so that a disk-full or permissions error does not crash the live request.
+	if(open(my $fout, '>>', $vwflog)) {
+		# SECURITY — CSV injection defence:
+		#   Every user-visible field is passed through _csv_escape so that
+		#   embedded double-quotes cannot break the CSV column structure, and
+		#   leading formula characters cannot trigger code execution when the
+		#   file is opened in a spreadsheet application.
+		print $fout
+			'"', _csv_escape($info->domain_name()), '",',
+			'"', strftime('%F %T', localtime), '",',
+			'"', _csv_escape($ENV{REMOTE_ADDR} // ''), '",',
+			'"', _csv_escape($country), '",',
+			'"', _csv_escape($info->browser_type()), '",',
+			'"', _csv_escape($lingua->language() // ''), '",',
+			$info->status(), ',',
+			'"', _csv_escape($template), '",',
+			'"', _csv_escape($info->as_string(raw => 1)), '",',
+			'"', _csv_escape($warnings), '",',
+			'"', _csv_escape($message), '",',
+			$duration_ms,
+			"\n";
+		close($fout);
+	}
+
+	# Optionally mirror the record to syslog (configured via the syslog stanza).
+	if($syslog) {
+		unless(Sys::Syslog->can('openlog')) {
+			require Sys::Syslog;
+			Sys::Syslog->import();
+		}
+
+		# Configure the socket transport if a hash of options was provided.
+		if(ref($syslog) eq 'HASH') {
+			Sys::Syslog::setlogsock($syslog);
+		}
+		Sys::Syslog::openlog($script_name, 'cons,pid', 'user');
+		# Use positional %s/%d format args so that special characters in the
+		# values cannot be interpreted as syslog format directives.
+		Sys::Syslog::syslog('info|local0', '%s %s %s %s %s %d %s %s %d %s %s',
+			$info->domain_name() || '',
+			$ENV{REMOTE_ADDR} || '',
+			$country,
+			$info->browser_type() || '',
+			$lingua->language() || '',
+			$info->status() || '',
+			$template || '',
+			$info->as_string(raw => 1) || '',
+			$duration_ms,
+			$warnings,
+			$message
+		);
+		Sys::Syslog::closelog();
+	}
+}

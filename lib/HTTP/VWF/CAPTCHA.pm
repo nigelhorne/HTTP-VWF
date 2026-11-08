@@ -2,15 +2,21 @@ package HTTP::VWF::CAPTCHA;
 
 use strict;
 use warnings;
+use Carp qw(croak);
 use LWP::UserAgent;
 use JSON::MaybeXS;
 
 sub new {
 	my ($class, %args) = @_;
 
+	# Checked one at a time: "die LIST" inside the hash below would swallow
+	# every key after it, losing the secret and the logger
+	my $site_key = $args{site_key} or croak('site_key required');
+	my $secret_key = $args{secret_key} or croak('secret_key required');
+
 	my $self = {
-		site_key => $args{site_key} || die 'site_key required',
-		secret_key => $args{secret_key} || die 'secret_key required',
+		site_key => $site_key,
+		secret_key => $secret_key,
 		logger => $args{logger},
 	};
 
@@ -21,6 +27,7 @@ sub verify {
 	my ($self, $response_token, $remote_ip) = @_;
 
 	return 0 unless $response_token;
+	$remote_ip //= 'unknown';	# Only used in log messages
 
 	my $ua = LWP::UserAgent->new(timeout => 10);
 
@@ -35,7 +42,12 @@ sub verify {
 		return 0;
 	}
 
-	my $result = decode_json($response->decoded_content());
+	# A malformed reply is a failed verification, not a crash
+	my $result = eval { decode_json($response->decoded_content()) };
+	if($@ || (ref($result) ne 'HASH')) {
+		$self->{logger}->error("reCAPTCHA verification failed: unparsable reply from $remote_ip") if $self->{logger};
+		return 0;
+	}
 
 	if ($result->{success}) {
 		$self->{logger}->info("reCAPTCHA verification successful for $remote_ip") if $self->{logger};

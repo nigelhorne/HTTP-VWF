@@ -35,6 +35,10 @@ Version 0.01
 
 our $VERSION = '0.01';
 
+# Where the server keeps one configuration directory per site, named after the
+# site - see HTTP::VWF::directory()
+our $DEFAULT_DIRECTORY = '/usr/lib/vwf';
+
 =head1 SUBROUTINES/METHODS
 
 =head2 new
@@ -155,6 +159,17 @@ sub new
 				'conf'
 			)
 		);
+
+		# The server's own directory for this site, used when the site keeps no
+		# conf/ beside its cgi-bin/.  The domain name comes from the Host header,
+		# so it must look like a host name before it is made part of a path
+		if(defined(my $directory = $params->{'directory'})) {
+			throw Error::Simple('directory must be a string') if ref($directory);
+			my $domain = $info->domain_name();
+			if(defined($domain) && ($domain =~ /\A[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\z/)) {
+				push @config_dirs, File::Spec->catdir($directory, $domain);
+			}
+		}
 
 		if($ENV{'DOCUMENT_ROOT'}) {
 			push(@config_dirs, File::Spec->catdir(
@@ -280,7 +295,8 @@ sub AUTOLOAD
 	our $AUTOLOAD;
 	my $self = shift;
 
-	return undef unless($self);
+	# Called as a class method there is no hash to look in
+	return undef unless(ref($self));
 	return unless defined($AUTOLOAD);
 
 	# Extract the key name from the AUTOLOAD variable
