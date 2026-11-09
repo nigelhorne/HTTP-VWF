@@ -54,7 +54,6 @@ use autodie qw(:all);
 use lib CGI::Info::script_dir() . '/../lib';
 # use lib File::HomeDir->my_home() . '/lib/perl5';
 
-use HTTP::VWF;
 use HTTP::VWF::Allow;
 use HTTP::VWF::Blacklist;
 use HTTP::VWF::Config;
@@ -75,13 +74,14 @@ Readonly my $SERVER_CONF_DIR => '/usr/lib/vwf';
 Readonly my $MAX_REQUESTS => 100;
 Readonly my $TIME_WINDOW => '60s';	# CHI-style duration string
 
+Readonly my @suffixlist => ('.pl', '.fcgi');
+
 # Set up by _init() on the first call to run(), not when the module is loaded.
 # Loading a module should do no work: reading configuration here meant that
 # anything that executed the page script while it was still compiling - such as
 # a configuration reader that took the script for its own configuration file -
 # ran the framework again inside itself, with any errors silently swallowed.
 my $info;
-my @suffixlist = ('.pl', '.fcgi');
 my $script_name;
 my $tmpdir;
 
@@ -99,9 +99,6 @@ my $script_dir;
 my $env_prefix;
 my $config_abstraction;
 my $logger;
-
-# 1 once _init() has run
-my $initialised;
 
 # True while run() is executing, so that a nested call can be refused
 our $RUNNING;
@@ -161,10 +158,6 @@ my $site_ready;
 # $config is populated lazily inside doit() so that per-domain configuration
 # is loaded after the FCGI request has been accepted and the domain is known.
 my $config;
-
-# Reader for the CSV access log, used by the meta_data page.  Created in doit()
-# from the same path that vwflog() writes to, which needs $config.
-my $vwf_log;
 
 # The pages that may be loaded; worked out in doit() since it needs $config
 my @valid_pages;
@@ -357,8 +350,10 @@ sub sig_handler {
 # than lost.
 sub _init
 {
-	return if($initialised);
-	$initialised = 1;
+	my $self = shift;
+
+	return if($self->{initialised});
+	$self->{initialised} = 1;
 
 	# USR1 and TERM both trigger a clean shutdown; PIPE is silenced because a
 	# broken client connection mid-response should not kill the worker.
@@ -395,14 +390,14 @@ sub _init
 	# Bootstrap CGI::Info before the FCGI accept loop so we can derive the script
 	# name and temp directory for logging even before the first real request.
 	$info = CGI::Info->new();
-	$script_name = basename($info->script_name(), @suffixlist);
+	$script_name = $self->{script_name} = basename($info->script_name(), @suffixlist);
 	$tmpdir = $info->tmpdir();
 
 	# When running under a real HTTP server, redirect STDERR to a per-script log
 	# file in the temp directory so that die/warn messages are captured.
 	if($ENV{'HTTP_USER_AGENT'}) {
 		close STDERR;
-		open(STDERR, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"));
+		open(STDERR, '>>', File::Spec->catfile($tmpdir, "$self->{script_name}.stderr"));
 	}
 
 	# Register the log filter that suppresses known-harmless warnings.
@@ -445,7 +440,7 @@ sub run
 	}
 	local $RUNNING = 1;
 
-	_init();
+	$self->_init();
 
 	# my $request = FCGI::Request($stdin, $stdout, $stderr);
 	my $request = FCGI::Request();
@@ -479,7 +474,7 @@ warn('YYYYYYYYYYY');
 			$logger = Log::Abstraction->new(logger => sub { print join(', ', @{$_[0]->{'message'}}), "\n" }, level => 'debug');
 			Log::WarnDie->dispatcher($logger);
 			$info->set_logger($logger);
-			set_data_loggers($logger);
+			$self->_set_data_loggers($logger);
 
 			# Enable full stack traces in Error.pm for command-line debugging.
 			$Error::Debug = 1;
@@ -494,7 +489,7 @@ warn('YYYYYYYYYYY');
 			# Report wall-clock time taken for this command-line invocation.
 			my @elapsed_time = $timer->hms();
 			my $timetaken = int($elapsed_time[2] * 1000);
-			$logger->info("$script_name completed in ${timetaken}ms");
+			$logger->info("$self->{script_name} completed in ${timetaken}ms");
 
 			last;	# command-line mode is single-shot; exit the accept loop
 		}
@@ -506,7 +501,7 @@ warn('YYYYYYYYYYY');
 		# Propagate the current logger to all data-access objects that may emit
 		# log messages during this request.
 		$info->set_logger($logger);
-		set_data_loggers($logger);
+		$self->_set_data_loggers($logger);
 
 		# Dispatch the request.  Any unhandled Error.pm exception is caught here
 		# so a single bad request cannot kill the FCGI worker process.
@@ -617,11 +612,11 @@ sub _doit
 
 	# A successful CAPTCHA solve stores a short-lived bypass token in the cache.
 	# While the token is present the client is exempt from rate-limit checks.
-	my $captcha_bypass_key = "$script_name:captcha_bypass:$client_ip";
+	my $captcha_bypass_key = "$self->{script_name}:captcha_bypass:$client_ip";
 	my $has_captcha_bypass = $rate_limit_cache->get($captcha_bypass_key);
 
 	# Read the current request count for this IP from the sliding-window cache.
-	my $request_count = $rate_limit_cache->get("$script_name:rate_limit:$client_ip") || 0;
+	my $request_count = $rate_limit_cache->get("$self->{script_name}:rate_limit:$client_ip") || 0;
 
 	# Allow the thresholds to be tuned via the config file; fall back to the
 	# compile-time constants if the stanza is missing.
@@ -652,7 +647,7 @@ sub _doit
 				# CAPTCHA verified - grant bypass
 				my $bypass_duration = $config->{'security'}->{'rate_limiting'}->{'captcha_bypass_duration'} || '300s';
 				$rate_limit_cache->set($captcha_bypass_key, 1, $bypass_duration);
-				$rate_limit_cache->set("$script_name:rate_limit:$client_ip", 0, '60s'); # Reset counter
+				$rate_limit_cache->set("$self->{script_name}:rate_limit:$client_ip", 0, '60s'); # Reset counter
 
 				$logger->info("CAPTCHA verified for $client_ip - rate limit bypass granted");
 				$has_captcha_bypass = 1;
@@ -686,7 +681,9 @@ sub _doit
 	}
 
 	$vwflog ||= $config->vwflog() || File::Spec->catfile($info->logdir(), 'vwf.log');
-	$vwf_log ||= HTTP::VWF::Data::vwf_log->new({
+	# Reader for the CSV access log, used by the meta_data page.
+	# Created from the same path that vwflog() writes to, which needs $config.
+	$self->{vwf_log} ||= HTTP::VWF::Data::vwf_log->new({
 		directory => dirname($vwflog),
 		filename => basename($vwflog),
 		no_entry => 1,
@@ -739,14 +736,14 @@ sub _doit
 					request_count => $request_count,
 				});
 
-				vwflog($vwflog, $info, $lingua, $syslog, 'Hard rate limit - CAPTCHA shown', $log, $request_start);
+				$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Hard rate limit - CAPTCHA shown', $log, $request_start);
 				return;
 			}
 
 			# No CAPTCHA to offer, so block until the window expires
 			$logger->warn("Hard rate limit exceeded for $client_ip ($request_count requests)");
 			send_error(status => 429, body => "Too many requests - try again later\n", headers => "Retry-After: $retry_after\n");
-			vwflog($vwflog, $info, $lingua, $syslog, 'Hard rate limit', $log, $request_start);
+			$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Hard rate limit', $log, $request_start);
 			return;
 		} elsif ($request_count >= $max_requests) {
 			# Soft limit exceeded - show CAPTCHA
@@ -775,7 +772,7 @@ sub _doit
 					request_count => $request_count,
 				});
 
-				vwflog($vwflog, $info, $lingua, $syslog, 'Soft rate limit - CAPTCHA shown', $log, $request_start);
+				$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Soft rate limit - CAPTCHA shown', $log, $request_start);
 				return;
 			}
 		}
@@ -783,7 +780,7 @@ sub _doit
 
 	# Commit the incremented request count back to the sliding-window cache.
 	# The TTL is the rate-limit window; the counter expires automatically.
-	$rate_limit_cache->set("$script_name:rate_limit:$client_ip", $request_count + 1, $time_window);
+	$rate_limit_cache->set("$self->{script_name}:rate_limit:$client_ip", $request_count + 1, $time_window);
 
 	# A request with no page parameter cannot be dispatched; send a 300
 	# response listing the known valid pages instead.
@@ -827,7 +824,7 @@ sub _doit
 			send_error(status => 403, body => "Access Denied\n");
 			$logger->info("$remote_addr: access denied: $reason");
 			$info->status(403);
-			vwflog($vwflog, $info, $lingua, $syslog, $reason, $log, $request_start);
+			$self->_vwflog($vwflog, $info, $lingua, $syslog, $reason, $log, $request_start);
 			return;
 		}
 	}
@@ -866,7 +863,7 @@ sub _doit
 			'FCGI::Buffer',
 			$info->browser_type(),
 			$info->domain_name(),
-			$script_name,
+			$self->{script_name},
 			$info->as_string(),
 			$lingua->language()
 		);
@@ -877,7 +874,7 @@ sub _doit
 		}
 		$logger->debug("enabling cache key $cache_key");
 
-		$buffercache ||= create_disc_cache(config => $config, logger => $logger, namespace => $script_name, root_dir => $cachedir);
+		$buffercache ||= create_disc_cache(config => $config, logger => $logger, namespace => $self->{script_name}, root_dir => $cachedir);
 		$fb->init(
 			cache_key => $cache_key,
 			cache => $buffercache,
@@ -1011,18 +1008,18 @@ sub _doit
 			databasedir => $database_dir,
 			database_dir => $database_dir,
 			%data,
-			vwf_log => $vwf_log,
+			vwf_log => $self->{vwf_log},
 		});
-		vwflog($vwflog, $info, $lingua, $syslog, '', $log, $request_start);
+		$self->_vwflog($vwflog, $info, $lingua, $syslog, '', $log, $request_start);
 	} elsif($invalidpage) {
 		if($info->status() == 429) {
 			# Throttled by HTTP::VWF::Display
 			my $interval = $config->{'throttle'}->{'interval'} // 90;
 			send_error(status => 429, body => "Too many requests - try again later\n", headers => "Retry-After: $interval\n", buffered => 1);
-			vwflog($vwflog, $info, $lingua, $syslog, 'Throttled', $log, $request_start);
+			$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Throttled', $log, $request_start);
 		} else {
 			choose();
-			vwflog($vwflog, $info, $lingua, $syslog, 'Unknown page', $log, $request_start);
+			$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Unknown page', $log, $request_start);
 		}
 		return;
 	} else {
@@ -1046,7 +1043,7 @@ sub _doit
 		}
 		send_error(status => $status, body => $body, buffered => 1);
 		$log->status($status);
-		vwflog($vwflog, $info, $lingua, $syslog, $error ? $error : 'Access denied', $log, $request_start);
+		$self->_vwflog($vwflog, $info, $lingua, $syslog, $error ? $error : 'Access denied', $log, $request_start);
 		throw Error::Simple($error ? $error : $info->as_string());
 	}
 }
@@ -1225,14 +1222,15 @@ sub _site_setup
 # Give the current logger to every data handle.  This runs before each request,
 # since command-line mode replaces the logger; the handles themselves are made
 # once, by _site_setup().
-sub set_data_loggers
+sub _set_data_loggers
 {
+	my $self = shift;
 	my $logger = shift;
 
 	foreach my $handle (values %data) {
 		$handle->set_logger($logger) if($handle->can('set_logger'));
 	}
-	$vwf_log->set_logger($logger) if($vwf_log);
+	$self->{vwf_log}->set_logger($logger) if($self->{vwf_log});
 }
 
 # Convert a CHI-style duration ('60s', '2 minutes', '90') to whole seconds
@@ -1335,8 +1333,10 @@ sub _csv_escape
 
 # Write one access record to vwf.log (CSV format) and optionally to syslog.
 # All user-influenced fields are escaped through _csv_escape before output.
-sub vwflog
+sub _vwflog
 {
+	my $self = shift;
+
 	my ($vwflog, $info, $lingua, $syslog, $message, $log, $request_start) = @_;
 
 	# Calculate request duration in milliseconds if a start timer was supplied.
@@ -1410,7 +1410,7 @@ sub vwflog
 		if(ref($syslog) eq 'HASH') {
 			Sys::Syslog::setlogsock($syslog);
 		}
-		Sys::Syslog::openlog($script_name, 'cons,pid', 'user');
+		Sys::Syslog::openlog($self->{script_name}, 'cons,pid', 'user');
 		# Use positional %s/%d format args so that special characters in the
 		# values cannot be interpreted as syslog format directives.
 		Sys::Syslog::syslog('info|local0', '%s %s %s %s %s %d %s %s %d %s %s',
