@@ -36,6 +36,7 @@ use HTTP::Status;
 use Log::Abstraction;
 use Error qw(:try);
 use File::Spec;
+use Params::Get;
 use POSIX qw(strftime);
 use Readonly;
 use Module::Runtime qw(require_module);	# Safe dynamic module loading; avoids string eval
@@ -276,17 +277,17 @@ handed to L<HTTP::VWF::Config>, which describes them.
 sub new
 {
 	my ($proto, @args) = @_;
-	my %params = (ref($args[0]) eq 'HASH') ? %{$args[0]} : @args;
+	my $params = Params::Get::get_params('directory', @_);
 
 	my $class = ref($proto) || $proto;
 
-	if(defined($params{'directory'}) && ref($params{'directory'})) {
+	if(defined($params->{'directory'}) && ref($params->{'directory'})) {
 		Carp::croak('directory must be a string');
 	}
 
 	return bless {
-		directory => $params{'directory'},
-		params => \%params,
+		directory => $params->{'directory'},
+		params => $params,
 	}, $class;
 }
 

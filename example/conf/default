@@ -1,21 +1,7 @@
-SiteTitle: The Brass Band Portal
-Contents: brass band sites
-Host: bandsman.co.uk
-Files: a=b
-Files: c=d
-SpiderName: brassbandportalspider
-UserName: njh
-ClamAVHost: 192.168.1.2
-# UserName: hornenj
-redirector: https%3A//www.bandsman.co.uk/cgi-bin/bbl2.fcgi
-adsense_id: pub-8124556630231145
-home_link: src=https%3A//www.bandsman.co.uk/images/brass.gif, alt=The Brass Band Portal, width=204
-twitter: bbportal
-twitter_related: cbportal, The Concert Band Portal
-links_database: bb-links
+SiteTitle: Test
+Contents: A test site
+Host: example.com
 # Where to find the templates
-root_dir: /home/njh/bandsman.co.uk
-# root_dir: /home/njh/www.votimo.com
-# root_dir: /home/njh/amelia.itteilag.com
+# root_dir: /home/njh/nigelhorne.com
 # disc_cache: driver=Redis, server=192.168.1.16, port=6379
 # memory_cache: driver=Memcached, server=192.168.1.15, port=11211
