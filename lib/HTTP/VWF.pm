@@ -52,7 +52,7 @@ use autodie qw(:all);
 # use lib '/usr/lib/example.com/lib';
 # use lib '../lib';
 use lib CGI::Info::script_dir() . '/../lib';
-use lib File::HomeDir->my_home() . '/lib/perl5';
+# use lib File::HomeDir->my_home() . '/lib/perl5';
 
 use HTTP::VWF;
 use HTTP::VWF::Allow;
@@ -75,22 +75,15 @@ Readonly my $SERVER_CONF_DIR => '/usr/lib/vwf';
 Readonly my $MAX_REQUESTS => 100;
 Readonly my $TIME_WINDOW => '60s';	# CHI-style duration string
 
-# Bootstrap CGI::Info before the FCGI accept loop so we can derive the script
-# name and temp directory for logging even before the first real request.
-my $info = CGI::Info->new();
+# Set up by _init() on the first call to run(), not when the module is loaded.
+# Loading a module should do no work: reading configuration here meant that
+# anything that executed the page script while it was still compiling - such as
+# a configuration reader that took the script for its own configuration file -
+# ran the framework again inside itself, with any errors silently swallowed.
+my $info;
 my @suffixlist = ('.pl', '.fcgi');
-my $script_name = basename($info->script_name(), @suffixlist);
-my $tmpdir = $info->tmpdir();
-
-# When running under a real HTTP server, redirect STDERR to a per-script log
-# file in the temp directory so that die/warn messages are captured.
-if($ENV{'HTTP_USER_AGENT'}) {
-	close STDERR;
-	open(STDERR, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"));
-}
-
-# Register the log filter that suppresses known-harmless warnings.
-Log::WarnDie->filter(\&filter);
+my $script_name;
+my $tmpdir;
 
 # $vwflog holds the path to the CSV access log; resolved from config on first request.
 my $vwflog;
@@ -101,25 +94,17 @@ my $info_cache;
 my $lingua_cache;
 my $buffercache;
 
-# Derive the environment-variable prefix from the hostname (e.g. MY_SITE_)
-# so that per-domain config overrides can be passed as environment variables.
-my $script_dir = $info->script_dir();
-my $env_prefix = uc($info->host_name()) . '_';
-$env_prefix =~ tr/\./_/;	# dots in hostnames become underscores in env var names
-# Config::Abstraction returns nothing, rather than an object, when no file
-# matches the domain: a vhost that has not been given a config file yet, the
-# command line test in the POD, or CI, where the hostname is a container id.
-# That is not fatal, so the logger is built with no configuration and the
-# framework carries on with its defaults - dying here would take the site down
-# over a configuration file that is only there to describe it.  The reason is
-# reported once rather than on every request.
-my $config_abstraction = Config::Abstraction->new(env_prefix => $env_prefix, flatten => 0, config_file => $info->domain_name(), config_dirs => ["$script_dir/../conf/", "$script_dir/../../conf"]);
-my $logger = Log::Abstraction->new($config_abstraction ? $config_abstraction->all() : {});
-Log::WarnDie->dispatcher($logger);
+# Also set by _init()
+my $script_dir;
+my $env_prefix;
+my $config_abstraction;
+my $logger;
 
-unless($config_abstraction) {
-	$logger->warn('No configuration file for ', ($info->domain_name() // '(unknown host)'), " in $script_dir/../conf/ or $script_dir/../../conf; using the defaults");
-}
+# 1 once _init() has run
+my $initialised;
+
+# True while run() is executing, so that a nested call can be refused
+our $RUNNING;
 
 # my $pagename = "HTTP::VWF::Display::$script_name";
 # eval "require $pagename";
@@ -349,9 +334,9 @@ sub _config
 # after doit() returns so the in-flight response is sent cleanly.
 sub sig_handler {
 	$exit_requested = 1;
-	$logger->trace('In sig_handler');
+	$logger->trace('In sig_handler') if($logger);
 	if(!$handling_request) {
-		$logger->info('Shutting down');
+		$logger->info('Shutting down') if($logger);
 		# Flush the page-level response cache to disk before we exit.
 		if($buffercache) {
 			$buffercache->purge();
@@ -364,41 +349,103 @@ sub sig_handler {
 	}
 }
 
-# USR1 and TERM both trigger a clean shutdown; PIPE is silenced because a
-# broken client connection mid-response should not kill the worker.
-$SIG{USR1} = \&sig_handler;
-$SIG{TERM} = \&sig_handler;
-$SIG{PIPE} = 'IGNORE';
 
-# Catch all Perl warnings and mirror them to the per-script stderr log file
-# as well as to the structured logger.
-$SIG{__WARN__} = sub {
-	my $msg = join '', @_;
-	if(open(my $fout, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"))) {
-		print $fout $info->domain_name(), ": $msg";
-		close $fout;
-	}
-	$logger->warn($msg) if($logger);
-};
+# Everything the framework needs before the first request: the bootstrap
+# CGI::Info, the script's name and temporary directory, the configuration and the
+# logger.  Called once, from run().  The handlers for warnings and fatal errors
+# are installed first, so that a failure while setting up is reported rather
+# than lost.
+sub _init
+{
+	return if($initialised);
+	$initialised = 1;
 
-# Catch fatal errors.  The $^S guard prevents this handler from interfering
-# with Error.pm's try/catch blocks which use eval internally.
-$SIG{__DIE__} = sub {
-	return if $^S;	# inside an eval - let the caller handle it
-	my $msg = join '', @_;
-	# Detach Log::WarnDie first so a logger error cannot cause infinite recursion.
-	Log::WarnDie->dispatcher(undef);
-	if(open(my $fout, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"))) {
-		print $fout $info->domain_name(), ": $msg";
-		close $fout;
+	# USR1 and TERM both trigger a clean shutdown; PIPE is silenced because a
+	# broken client connection mid-response should not kill the worker.
+	$SIG{USR1} = \&sig_handler;
+	$SIG{TERM} = \&sig_handler;
+	$SIG{PIPE} = 'IGNORE';
+
+	# Catch all Perl warnings and mirror them to the per-script stderr log file
+	# as well as to the structured logger.
+	$SIG{__WARN__} = sub {
+		my $msg = join '', @_;
+		if($tmpdir && open(my $fout, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"))) {
+			print {$fout} (($info ? $info->domain_name() : undef) // '(unknown host)'), ": $msg";
+			close $fout;
+		}
+		$logger->warn($msg) if($logger);
+	};
+
+	# Catch fatal errors.  The $^S guard prevents this handler from interfering
+	# with Error.pm's try/catch blocks which use eval internally.
+	$SIG{__DIE__} = sub {
+		return if $^S;	# inside an eval - let the caller handle it
+		my $msg = join '', @_;
+		# Detach Log::WarnDie first so a logger error cannot cause infinite recursion.
+		Log::WarnDie->dispatcher(undef);
+		if($tmpdir && open(my $fout, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"))) {
+			print {$fout} (($info ? $info->domain_name() : undef) // '(unknown host)'), ": $msg";
+			close $fout;
+		}
+		$logger->fatal($msg) if($logger);
+		CORE::die @_;	# re-throw so the original die location is preserved
+	};
+
+	# Bootstrap CGI::Info before the FCGI accept loop so we can derive the script
+	# name and temp directory for logging even before the first real request.
+	$info = CGI::Info->new();
+	$script_name = basename($info->script_name(), @suffixlist);
+	$tmpdir = $info->tmpdir();
+
+	# When running under a real HTTP server, redirect STDERR to a per-script log
+	# file in the temp directory so that die/warn messages are captured.
+	if($ENV{'HTTP_USER_AGENT'}) {
+		close STDERR;
+		open(STDERR, '>>', File::Spec->catfile($tmpdir, "$script_name.stderr"));
 	}
-	$logger->fatal($msg) if($logger);
-	CORE::die @_;	# re-throw so the original die location is preserved
-};
+
+	# Register the log filter that suppresses known-harmless warnings.
+	Log::WarnDie->filter(\&filter);
+
+	# Derive the environment-variable prefix from the hostname (e.g. MY_SITE_)
+	# so that per-domain config overrides can be passed as environment variables.
+	$script_dir = $info->script_dir();
+	$env_prefix = uc($info->host_name()) . '_';
+	$env_prefix =~ tr/\./_/;	# dots in hostnames become underscores in env var names
+	# Config::Abstraction returns nothing, rather than an object, when no file
+	# matches the domain: a vhost that has not been given a config file yet, the
+	# command line test in the POD, or CI, where the hostname is a container id.
+	# That is not fatal, so the logger is built with no configuration and the
+	# framework carries on with its defaults - dying here would take the site down
+	# over a configuration file that is only there to describe it.  The reason is
+	# reported once rather than on every request.
+	$config_abstraction = Config::Abstraction->new(env_prefix => $env_prefix, flatten => 0, config_file => $info->domain_name(), config_dirs => ["$script_dir/../conf/", "$script_dir/../../conf"]);
+	$logger = Log::Abstraction->new($config_abstraction ? $config_abstraction->all() : {});
+	Log::WarnDie->dispatcher($logger);
+
+	unless($config_abstraction) {
+		$logger->warn('No configuration file for ', ($info->domain_name() // '(unknown host)'), " in $script_dir/../conf/ or $script_dir/../../conf; using the defaults");
+	}
+}
 
 sub run
 {
 	my $self = shift;
+
+	# A nested call means something has executed the page script again while
+	# it was running or still compiling - for example a configuration reader
+	# that took the script for its own configuration file and evaluated it.
+	# Refuse, loudly, on STDERR: a die here would be swallowed by that reader's
+	# eval, and carrying on would consume the server's requests.
+	if($RUNNING || (${^GLOBAL_PHASE} ne 'RUN')) {
+		print STDERR __PACKAGE__, '::run() called re-entrantly or during compilation (phase ',
+			${^GLOBAL_PHASE}, '); is the script being read as its own configuration file?', "\n";
+		return;
+	}
+	local $RUNNING = 1;
+
+	_init();
 
 	# my $request = FCGI::Request($stdin, $stdout, $stderr);
 	my $request = FCGI::Request();
@@ -409,8 +456,6 @@ warn('YYYYYYYYYYY');
 	# negative value when the server wants this worker to exit (e.g. graceful
 	# shutdown), which breaks the loop naturally.
 	while($handling_request = ($request->Accept() >= 0)) {
-print STDERR '>>>>>>>> ', __LINE__, "\n";
-
 		# REMOTE_ADDR is absent when running from the command line for testing.
 		# Switch to a verbose debug logger and single-shot mode in that case.
 		unless($ENV{'REMOTE_ADDR'}) {
@@ -428,28 +473,19 @@ print STDERR '>>>>>>>> ', __LINE__, "\n";
 				$ENV{'HTTP_ACCEPT_LANGUAGE'} = lc($lang);
 			}
 
-print STDERR '>>>>>>>> ', __LINE__, "\n";
 			Database::Abstraction::init({ logger => $logger });
 
 			# Replace the production logger with a simple STDOUT printer.
-print STDERR '>>>>>>>> ', __LINE__, "\n";
-			$logger = Log::Abstraction->new(logger => sub { print STDERR join(', ', @{$_[0]->{'message'}}), "\n" }, level => 'debug');
-print STDERR '>>>>>>>> ', __LINE__, "\n";
+			$logger = Log::Abstraction->new(logger => sub { print join(', ', @{$_[0]->{'message'}}), "\n" }, level => 'debug');
 			Log::WarnDie->dispatcher($logger);
-print STDERR '>>>>>>>> ', __LINE__, "\n";
 			$info->set_logger($logger);
-print STDERR '>>>>>>>> ', __LINE__, "\n";
 			set_data_loggers($logger);
-print STDERR '>>>>>>>> ', __LINE__, "\n";
 
 			# Enable full stack traces in Error.pm for command-line debugging.
 			$Error::Debug = 1;
 			try {
-print STDERR '>>>>>>>> ', __LINE__, "\n";
 				$self->_doit(debug => 1);
-print STDERR '>>>>>>>> ', __LINE__, "\n";
 			} catch Error with {
-print STDERR '>>>>>>>> ', __LINE__, "\n";
 				my $msg = shift;
 				warn "$msg\n", $msg->stacktrace();
 				$logger->error($msg);
@@ -508,15 +544,12 @@ sub _doit
 {
 	my $self = shift;
 
-print STDERR '>>>>>>>> ', __LINE__, "\n";
 	# Record the wall-clock start time so we can report request duration later.
 	my $request_start = Timer::Simple->new();
 
 	# CGI::Info caches state between calls; reset it so this request gets a
 	# fresh view of the environment rather than stale values from the last one.
 	CGI::Info->reset();
-
-	$logger->debug('In doit - domain is ', CGI::Info->domain_name());
 
 	my %params = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
 
@@ -573,6 +606,7 @@ print STDERR '>>>>>>>> ', __LINE__, "\n";
 	}
 	# Rebuild $info now that we have a cache and the domain is known.
 	$info = CGI::Info->new($options);
+	$logger->debug('In doit - domain is ', $info->domain_name());
 
 	# Lazily initialise the in-memory rate-limit counter store.
 	$rate_limit_cache ||= create_memory_cache(config => $config, logger => $logger, namespace => 'rate_limit');
@@ -1424,3 +1458,5 @@ sub DESTROY
 	Log::WarnDie->dispatcher(undef);
 }
 
+
+1;
