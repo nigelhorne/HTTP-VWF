@@ -151,11 +151,6 @@ my %data;
 my @supported_languages;
 my @rate_limit_trusted_ips;
 
-# 1 once _site_setup() has run.  The configuration, the database directory, the
-# data handles and these lists last for the life of the process, not for one
-# request.
-my $site_ready;
-
 # $config is populated lazily inside doit() so that per-domain configuration
 # is loaded after the FCGI request has been accepted and the domain is known.
 my $config;
@@ -1170,8 +1165,12 @@ sub _site_setup
 	my $self = shift;
 	my $config = shift;
 
-	return if($site_ready);
-	$site_ready = 1;
+	return if($self->{site_ready});
+	# The configuration, the database directory, the
+	# data handles and these lists last for the life of the process, not for one
+	# request.
+
+	$self->{site_ready} = 1;
 
 	# Where the site's own databases are.  Database::Abstraction reads them, and
 	# the pages are told the directory as databasedir and database_dir.
