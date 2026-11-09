@@ -1440,7 +1440,7 @@ sub DESTROY
 
 	# Clean up resources before shutdown
 	$logger->info('Shutting down') if(defined($logger));
-	if($buffercache) {
+	if($buffercache && !$exit_requested) {
 		$buffercache->purge();
 	}
 	if($rate_limit_cache) {
@@ -1457,6 +1457,5 @@ sub DESTROY
 	CHI->stats->flush();
 	Log::WarnDie->dispatcher(undef);
 }
-
 
 1;
