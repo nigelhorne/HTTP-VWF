@@ -2126,8 +2126,11 @@ subtest 'Web::VWF::Display::meta_data' => sub {
 			{ time => $stamp->($minute), type => 'robot', http_code => 404, duration_ms => 5, template => 't' },
 		);
 		is($display->html(vwf_log => $rows), 'page', 'rendered');
-		like($seen{'datapoints'}, qr/\{y: 1, label: "web"\}.*\{y: 1, label: "robot"\}.*\{y: 0, label: "ai"\}/s, 'browser breakdown');
-		like($seen{'status_dp'}, qr/\{y: 1, label: "200"\},\n\{y: 1, label: "404"\}/, 'status breakdown');
+		like($seen{'browser_chart'}, qr/id="browser_chart"/, 'browser chart');
+		like($seen{'status_chart'}, qr/id="status_chart"/, 'status chart');
+		like($seen{'rate_chart'}, qr/id="rate_chart"/, 'rate chart');
+		like($seen{'latency_chart'}, qr/id="latency_chart"/, 'latency chart');
+		is($seen{'slow_chart'}, '', 'no slow chart from two samples');
 		is_deeply($seen{'server'}, { cpu_count => 1 }, 'server metrics');
 		throws_ok { $display->html() } qr/\AMissing 'vwf_log' handle/, 'log required';
 		restore_all();
@@ -2191,18 +2194,24 @@ subtest 'Web::VWF::Display::meta_data' => sub {
 			'junk',
 		);
 		my $r = $display->get_request_rate_24h($rows, $CONFIG{'domain'});
-		is($r->{'total_dp'}, qq({ label: "$hour", y: 3 }), 'total');
-		is($r->{'error_dp'}, qq({ label: "$hour", y: 1 }), 'errors');
-		is($r->{'error_pct_dp'}, qq({ label: "$hour", y: 33.33 }), 'error percentage');
-		is_deeply($display->get_request_rate_24h($log->(), 'x'), { total_dp => '', error_dp => '', error_pct_dp => '' }, 'empty log');
+		is_deeply($r->{'total'}, [[$hour, 3]], 'total');
+		is_deeply($r->{'errors'}, [[$hour, 1]], 'errors');
+		is_deeply($r->{'error_pct'}, [[$hour, 33.33]], 'error percentage');
+		is_deeply($display->get_request_rate_24h($log->(), 'x'), { total => [], errors => [], error_pct => [] }, 'empty log');
 	};
 
 	subtest 'get_latency_24h' => sub {
 		my $t = $stamp->($minute);
 		my $hour = substr($t, 11, 2) . ':00';
 		my $r = $display->get_latency_24h($log->(map { { time => $t, duration_ms => $_ } } 10, 20, 30, 40), 'x');
-		is($r->{'avg_dp'}, qq({ label: "$hour", y: 25 }), 'average');
-		is($r->{'p95_dp'}, qq({ label: "$hour", y: 30 }), '95th percentile');
+		is_deeply($r->{'avg'}, [[$hour, 25]], 'average');
+		is_deeply($r->{'p95'}, [[$hour, 30]], '95th percentile');
+
+		# Rows written by the old timer bug hold about 1.8e12 ms: no request
+		# lasted a day, so they are not measurements and must not skew a chart
+		my $stale = $display->get_latency_24h($log->(map { { time => $t, duration_ms => $_ } } 10, 20, 30, 40, 1_794_339_232_583), 'x');
+		is_deeply($stale->{'avg'}, [[$hour, 25]], 'implausible duration ignored in the average');
+		is_deeply($stale->{'p95'}, [[$hour, 30]], 'implausible duration ignored in the percentile');
 
 		# The log is written from requests: a duration must never be run as
 		# code, and anything that is not a number is not a duration
@@ -2211,8 +2220,8 @@ subtest 'Web::VWF::Display::meta_data' => sub {
 		my $rows = $log->((map { { time => $t, duration_ms => $_ } } @hostile), { time => $t, duration_ms => 8 });
 		warnings_are { $r = $display->get_latency_24h($rows, 'x') } [], 'no warnings';
 		is($PWNED, 0, 'log contents not executed');
-		is($r->{'avg_dp'}, qq({ label: "$hour", y: 8 }), 'only the number counted');
-		is_deeply($display->get_latency_24h($log->({ time => $t }), 'x'), { avg_dp => '', p95_dp => '' }, 'no durations');
+		is_deeply($r->{'avg'}, [[$hour, 8]], 'only the number counted');
+		is_deeply($display->get_latency_24h($log->({ time => $t }), 'x'), { avg => [], p95 => [] }, 'no durations');
 	};
 
 	subtest 'get_slow_endpoints_24h' => sub {
@@ -2223,21 +2232,30 @@ subtest 'Web::VWF::Display::meta_data' => sub {
 		}
 		push @rows, map { { time => $t, template => 'rare', duration_ms => 99999 } } 1 .. $CONFIG{'slow_min_samples'} - 1;
 		my $dp = $display->get_slow_endpoints_24h($log->(@rows), 'x');
-		my @labels = ($dp =~ /label: "([^"]+)"/g);
+		my @labels = map { $_->[0] } @{$dp};
 		is(scalar(@labels), $CONFIG{'slow_top_n'}, 'top ten only');
 		is($labels[0], 'web/p12.tmpl', 'slowest first, templates/ prefix removed');
 		ok(!(grep { $_ eq 'rare' } @labels), 'too few samples to rank');
 
-		# Labels go into JavaScript, so they must not be able to escape the string
+		# A stale timer reading must not fill the slow-endpoint chart
+		my @stale = map { { time => $t, template => 'stale.tmpl', duration_ms => 1_794_339_232_583 } } 1 .. $CONFIG{'slow_min_samples'};
+		my $stale_dp = $display->get_slow_endpoints_24h($log->(@rows, @stale), 'x');
+		ok(!(grep { $_->[0] eq 'stale.tmpl' } @{$stale_dp}), 'implausible duration not ranked');
+
+		# A whole day is the boundary: longer than this window is impossible,
+		# a whole day itself is merely the worst request imaginable
+		my @boundary = map { { time => $t, template => 'boundary.tmpl', duration_ms => 86_400_000 } } 1 .. $CONFIG{'slow_min_samples'};
+		is_deeply($display->get_slow_endpoints_24h($log->(@boundary), 'x'), [['boundary.tmpl', 86_400_000]], 'a full-window duration is plausible');
+
+		# Labels are data for HTML::D3, which escapes them when it writes the
+		# chart: they are passed through here unchanged, never run or quoted.
 		my $evil = 'x\\"); alert(1); ("';
 		$dp = $display->get_slow_endpoints_24h($log->(map { { time => $t, template => $evil, duration_ms => 5 } } 1 .. $CONFIG{'slow_min_samples'}), 'x');
-		is($dp, '{ label: "x\\\\\\"); alert(1); (\\"", y: 5 }', 'backslashes and quotes escaped');
-		$dp = $display->get_slow_endpoints_24h($log->(map { { time => $t, template => 'end\\', duration_ms => 5 } } 1 .. $CONFIG{'slow_min_samples'}), 'x');
-		is($dp, '{ label: "end\\\\", y: 5 }', 'trailing backslash cannot eat the closing quote');
+		is($dp->[0][0], $evil, 'label passed through for HTML::D3 to escape');
 
 		my @junk = ('not a hash', undef, { time => $t, duration_ms => 'abc' }, { time => $t, duration_ms => -1 }, { time => $t, duration_ms => 0 }, { duration_ms => 5 });
 		warnings_are { $dp = $display->get_slow_endpoints_24h($log->(@junk), 'x') } [], 'junk rows skipped quietly';
-		is($dp, '', 'nothing ranked');
+		is_deeply($dp, [], 'nothing ranked');
 	};
 
 	subtest '_utc_offset' => sub {

@@ -1342,9 +1342,14 @@ sub _vwflog
 	my ($vwflog, $info, $lingua, $syslog, $message, $log, $request_start) = @_;
 
 	# Calculate request duration in milliseconds if a start timer was supplied.
+	# $request_start is a Timer::Simple, so ask it for the seconds that have
+	# passed: its numeric overload yields elapsed(), so subtracting it from the
+	# clock gave an epoch's worth of seconds (about 1.8e12 ms per request).  A
+	# plain epoch is still accepted for callers that pass one.
 	my $duration_ms = '';
 	if($request_start) {
-		$duration_ms = int((Time::HiRes::time() - $request_start) * 1000);
+		my $seconds = ref($request_start) ? $request_start->elapsed() : Time::HiRes::time() - $request_start;
+		$duration_ms = int($seconds * 1000);
 	}
 
 	# Determine which template was rendered for this request (may be empty on error).

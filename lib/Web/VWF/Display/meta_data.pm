@@ -9,6 +9,7 @@ use warnings;
 
 use parent 'Web::VWF::Display';
 
+use HTML::D3;
 use Filesys::Df;
 use List::Util qw(max sum0);
 use Scalar::Util qw(looks_like_number);
@@ -24,6 +25,12 @@ use Time::Seconds;
 # Keep this in step with VWF::Display::_types() and CGI::Info::browser_type().
 Readonly my @BROWSER_TYPES => ('web', 'mobile', 'search', 'robot', 'ai');
 
+# A request cannot have taken longer than the window these charts cover, so a
+# duration beyond one day is not a measurement but a stale row written by the
+# old timer bug (about 1.8e12 ms).  One such row would otherwise dominate the
+# average, the 95th percentile and the slow-endpoint list for a whole day.
+Readonly my $MAX_DURATION_MS => ONE_DAY * 1000;
+
 sub html {
 	my $self = shift;
 	my %args = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
@@ -31,11 +38,11 @@ sub html {
 	my $vwf_log = $args{'vwf_log'} or die "Missing 'vwf_log' handle";
 	my $domain_name = $self->{'info'}->domain_name();
 
-	# --- Browser breakdown for existing chart ---
-	my $datapoints = '';
+	# --- Browser breakdown: one slice per browser type ---
+	my @browser;
 	foreach my $type (@BROWSER_TYPES) {
 		my @entries = $vwf_log->type({ domain_name => $domain_name, type => $type });
-		$datapoints .= '{y: ' . scalar(@entries) . ", label: \"$type\"},\n";
+		push @browser, [$type, scalar(@entries)];
 		if($self->{'logger'}) {
 			$self->{'logger'}->debug("$type = " . scalar(@entries));
 		}
@@ -47,32 +54,71 @@ sub html {
 	# --- Traffic metrics from vwf_log ---
 	my $traffic_metrics = $self->get_traffic_metrics($vwf_log, $domain_name);
 
-	# --- HTTP status breakdown for pie chart ---
-	my $status_datapoints;
+	# --- HTTP status breakdown: one slice per status code ---
 	my %status_count;
 	foreach my $http_code ($vwf_log->http_code({ domain_name => $domain_name })) {
 		$status_count{$http_code}++;
 	}
-
-	foreach my $code (sort keys %status_count) {
-		$status_datapoints .= '{y: ' . $status_count{$code} . ", label: \"$code\"},\n";
-	}
+	my @status = map { [$_, $status_count{$_}] } sort keys %status_count;
 
 	my $rate_24h = $self->get_request_rate_24h($vwf_log, $domain_name);
 	my $latency_24h = $self->get_latency_24h($vwf_log, $domain_name);
+	my $slow = $self->get_slow_endpoints_24h($vwf_log, $domain_name);
+
+	# The charts are built here and the template only places them.  HTML::D3
+	# escapes the labels it writes into the page, so nothing from the access log
+	# is trusted as markup.  A chart with no data is left out rather than drawn
+	# as an empty frame.
+	my $charts = HTML::D3->new(width => 800, height => 400);
+	my $browser_chart = (grep { $_->[1] } @browser)
+		? $charts->render_pie_chart_snippet({ data => \@browser, id => 'browser_chart', donut => 1, sort_slices => 'value' })->{'html'}
+		: '';
+	my $status_chart = @status
+		? $charts->render_pie_chart_snippet({ data => \@status, id => 'status_chart', donut => 1, sort_slices => 'label' })->{'html'}
+		: '';
+	my $rate_chart = @{$rate_24h->{'total'}}
+		? $charts->render_multi_series_line_chart_snippet({
+			series_data => _series(['Requests', $rate_24h->{'total'}], ['Errors', $rate_24h->{'errors'}]),
+			id => 'rate_chart', x_label => 'Hour', y_label => 'Requests',
+		})->{'html'}
+		: '';
+	my $latency_chart = @{$latency_24h->{'avg'}}
+		? $charts->render_multi_series_line_chart_snippet({
+			series_data => _series(['Average', $latency_24h->{'avg'}], ['P95', $latency_24h->{'p95'}]),
+			id => 'latency_chart', x_label => 'Hour', y_label => 'Milliseconds',
+		})->{'html'}
+		: '';
+	my $slow_chart = @{$slow}
+		? $charts->render_bar_chart_snippet({
+			data => $slow, id => 'slow_chart', orientation => 'horizontal',
+			sort_bars => 'value', show_values => 1, value_label => 'ms',
+		})->{'html'}
+		: '';
 
 	return $self->SUPER::html({
-		datapoints => $datapoints,
 		server => $server_metrics,
 		traffic => $traffic_metrics,
-		status_dp => $status_datapoints,
-		rate_total_dp => $rate_24h->{total_dp},
-		rate_error_dp => $rate_24h->{error_dp},
-		rate_error_pct_dp => $rate_24h->{error_pct_dp},
-		latency_avg_dp => $latency_24h->{avg_dp},
-		latency_p95_dp => $latency_24h->{p95_dp},
-		slow_dp => $self->get_slow_endpoints_24h($vwf_log, $domain_name),
+		browser_chart => $browser_chart,
+		status_chart => $status_chart,
+		rate_chart => $rate_chart,
+		latency_chart => $latency_chart,
+		slow_chart => $slow_chart,
 	});
+}
+
+# HTML::D3's multi-series charts take {name, data => [{label, value}, ...]};
+# the counting methods above return [label, value] pairs.
+sub _series
+{
+	my @series = @_;
+
+	return [ map {
+		my ($name, $points) = @{$_};
+		{
+			name => $name,
+			data => [ map { { label => $_->[0], value => $_->[1] } } @{$points} ],
+		}
+	} @series ];
 }
 
 sub get_server_metrics {
@@ -187,28 +233,22 @@ sub get_request_rate_24h {
 		}
 	}
 
-	# Build CanvasJS datapoints
-	my (@total_dp, @error_dp, @error_pct_dp);
+	# One [label, value] pair per hour, ready for HTML::D3
+	my (@total, @errors, @error_pct);
 
 	foreach my $hour (sort keys %buckets) {
 		my $total = $buckets{$hour}{total} // 0;
 		my $errors = $buckets{$hour}{errors} // 0;
 
-		push @total_dp,
-		sprintf('{ label: "%s", y: %d }', $hour, $total);
-
-		push @error_dp,
-		sprintf('{ label: "%s", y: %d }', $hour, $errors);
-
-		my $pct = $total ? sprintf('%.2f', ($errors / $total) * 100) : 0;
-		push @error_pct_dp,
-		sprintf('{ label: "%s", y: %s }', $hour, $pct);
+		push @total, [$hour, $total];
+		push @errors, [$hour, $errors];
+		push @error_pct, [$hour, $total ? 0 + sprintf('%.2f', ($errors / $total) * 100) : 0];
 	}
 
 	return {
-		total_dp => join(",\n", @total_dp),
-		error_dp => join(",\n", @error_dp),
-		error_pct_dp => join(",\n", @error_pct_dp),
+		total => \@total,
+		errors => \@errors,
+		error_pct => \@error_pct,
 	};
 }
 
@@ -224,6 +264,7 @@ sub get_latency_24h {
 		next unless $entry->{time};
 		# The log is data, not code: only numbers are durations
 		next unless defined($entry->{duration_ms}) && looks_like_number($entry->{duration_ms});
+		next if $entry->{duration_ms} > $MAX_DURATION_MS;
 
 		my $tp;
 		eval { $tp = Time::Piece->strptime($entry->{time}, '%Y-%m-%d %H:%M:%S') };
@@ -237,7 +278,7 @@ sub get_latency_24h {
 		push @{ $buckets{$hour} }, $entry->{duration_ms};
 	}
 
-	my (@avg_dp, @p95_dp);
+	my (@avg, @p95);
 
 	foreach my $hour (sort keys %buckets) {
 		my @vals = sort { $a <=> $b } @{ $buckets{$hour} };
@@ -250,16 +291,13 @@ sub get_latency_24h {
 		my $p95_index = int(0.95 * ($count - 1));
 		my $p95 = $vals[$p95_index];
 
-		push @avg_dp,
-		sprintf('{ label: "%s", y: %d }', $hour, $avg);
-
-		push @p95_dp,
-		sprintf('{ label: "%s", y: %d }', $hour, $p95);
+		push @avg, [$hour, $avg];
+		push @p95, [$hour, $p95];
 	}
 
 	return {
-		avg_dp => join(",\n", @avg_dp),
-		p95_dp => join(",\n", @p95_dp),
+		avg => \@avg,
+		p95 => \@p95,
 	};
 }
 
@@ -279,6 +317,7 @@ sub get_slow_endpoints_24h {
 		next unless defined $row->{time};
 		next unless defined($row->{duration_ms}) && looks_like_number($row->{duration_ms});
 		next if $row->{duration_ms} <= 0;
+		next if $row->{duration_ms} > $MAX_DURATION_MS;
 
 		my $tp;
 		eval { $tp = Time::Piece->strptime($row->{time}, '%Y-%m-%d %H:%M:%S') };
@@ -310,22 +349,17 @@ sub get_slow_endpoints_24h {
 	@ranked = sort { $b->{p95_ms} <=> $a->{p95_ms} } @ranked;
 	splice(@ranked, 10) if @ranked > 10;
 
-	# Step 5: CanvasJS datapoints
+	# Step 5: [label, value] pairs.  The labels stay as the log wrote them;
+	# HTML::D3 escapes them when it writes the chart.
 	my @dp;
 	foreach my $row (@ranked) {
 		my $label = $row->{template};
-		$label =~ s/\\/\\\\/g;	# Escape backslashes first, or a trailing one escapes the closing quote
-		$label =~ s/"/\\"/g;
 		$label =~ s/^.+\/templates\///;
 
-		push @dp, sprintf(
-			'{ label: "%s", y: %d }',
-			$label,
-			$row->{p95_ms}
-		);
+		push @dp, [$label, $row->{p95_ms}];
 	}
 
-	return join(', ', @dp);
+	return \@dp;
 }
 
 sub _utc_offset
