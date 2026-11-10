@@ -31,6 +31,14 @@ Readonly my @BROWSER_TYPES => ('web', 'mobile', 'search', 'robot', 'ai');
 # average, the 95th percentile and the slow-endpoint list for a whole day.
 Readonly my $MAX_DURATION_MS => ONE_DAY * 1000;
 
+# What each panel says when it has nothing to draw.  An empty frame looks like
+# a broken chart, so every chart area explains itself instead - and the page
+# has one place, not two, where that wording lives.
+Readonly my $NO_REQUESTS => '<p>No requests logged yet.</p>';
+Readonly my $NO_RECENT_REQUESTS => '<p>No requests logged in the last 24 hours.</p>';
+Readonly my $NO_DURATIONS => '<p>No request durations logged in the last 24 hours.</p>';
+Readonly my $NOT_ENOUGH_SAMPLES => '<p>Not enough data yet to rank endpoints.</p>';
+
 sub html {
 	my $self = shift;
 	my %args = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
@@ -67,35 +75,34 @@ sub html {
 
 	# The charts are built here and the template only places them.  HTML::D3
 	# escapes the labels it writes into the page, so nothing from the access log
-	# is trusted as markup.  A chart with no data is left out rather than drawn
-	# as an empty frame.
+	# is trusted as markup.  A chart with no data is a placeholder, never an
+	# empty frame.
 	my $charts = HTML::D3->new(width => 800, height => 400);
 	my $browser_chart = (grep { $_->[1] } @browser)
 		? _scoped_snippet($charts->render_pie_chart_snippet({ data => \@browser, id => 'browser_chart', donut => 1, sort_slices => 'value' }))
-		: '';
+		: $NO_REQUESTS;
 	my $status_chart = @status
 		? _scoped_snippet($charts->render_pie_chart_snippet({ data => \@status, id => 'status_chart', donut => 1, sort_slices => 'label' }))
-		: '';
+		: $NO_REQUESTS;
 	my $rate_chart = @{$rate_24h->{'total'}}
 		? _scoped_snippet($charts->render_multi_series_line_chart_snippet({
 			series_data => _series(['Requests', $rate_24h->{'total'}], ['Errors', $rate_24h->{'errors'}]),
 			id => 'rate_chart', x_label => 'Hour', y_label => 'Requests',
 		}))
-		: '';
+		: $NO_RECENT_REQUESTS;
 	my $latency_chart = @{$latency_24h->{'avg'}}
 		? _scoped_snippet($charts->render_multi_series_line_chart_snippet({
 			series_data => _series(['Average', $latency_24h->{'avg'}], ['P95', $latency_24h->{'p95'}]),
 			id => 'latency_chart', x_label => 'Hour', y_label => 'Milliseconds',
 		}))
-		: '';
+		: $NO_DURATIONS;
 	my $slow_chart = @{$slow}
 		? _scoped_snippet($charts->render_bar_chart_snippet({
 			data => $slow, id => 'slow_chart', orientation => 'horizontal',
 			sort_bars => 'value', show_values => 1, value_label => 'ms',
 		}))
-		# Too few requests to rank anything is normal, not an error: say so
-		# rather than leaving a blank panel that looks like a broken chart
-		: '<p>Not enough data yet to rank endpoints.</p>';
+		# Too few requests to rank anything is normal, not an error
+		: $NOT_ENOUGH_SAMPLES;
 
 	return $self->SUPER::html({
 		server => $server_metrics,

@@ -29,22 +29,22 @@
 
 	<div class="panel">
 		<h2>Browser Breakdown</h2>
-		[% IF browser_chart %][% browser_chart %][% ELSE %]<p>No requests logged yet.</p>[% END %]
+		[% browser_chart %]
 	</div>
 
 	<div class="panel">
 		<h2>HTTP Status Breakdown</h2>
-		[% IF status_chart %][% status_chart %][% ELSE %]<p>No requests logged yet.</p>[% END %]
+		[% status_chart %]
 	</div>
 
 	<div class="panel">
 		<h2>Requests and Errors (last 24 hours)</h2>
-		[% IF rate_chart %][% rate_chart %][% ELSE %]<p>No requests logged yet.</p>[% END %]
+		[% rate_chart %]
 	</div>
 
 	<div class="panel">
 		<h2>Latency (last 24 hours)</h2>
-		[% IF latency_chart %][% latency_chart %][% ELSE %]<p>No durations logged yet.</p>[% END %]
+		[% latency_chart %]
 	</div>
 
 	<div class="panel">

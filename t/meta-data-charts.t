@@ -32,6 +32,15 @@ use Web::VWF::Display::meta_data;
 
 Readonly my @CHARTS => qw(browser_chart status_chart rate_chart latency_chart slow_chart);
 
+# Every empty panel must say why it is empty; a blank one looks like a bug
+Readonly my %EMPTY_TEXT => (
+	browser_chart => 'No requests logged yet',
+	status_chart => 'No requests logged yet',
+	rate_chart => 'No requests logged in the last 24 hours',
+	latency_chart => 'No request durations logged in the last 24 hours',
+	slow_chart => 'Not enough data yet to rank endpoints',
+);
+
 # ---------------------------------------------------------------------------
 # Stand-ins for the objects the page is handed at run time
 # ---------------------------------------------------------------------------
@@ -118,13 +127,16 @@ foreach my $id (@CHARTS) {
 
 	my $points = chart_points($html // '');
 	cmp_ok($points, '>=', 1, "$id has data to draw ($points point(s))");
+	unlike($html // '', qr/No requests logged|No request durations|Not enough data yet/, "$id is a real chart, not a placeholder");
 }
 
-# An empty log must give placeholders, never a frame with nothing in it
+# An empty log must give a clear placeholder, never a frame with nothing in it
 %chart = ();
 $display->html(vwf_log => Local::VwfLog->new());
 foreach my $id (@CHARTS) {
-	unlike($chart{$id} // '', qr/<svg/, "$id is not rendered as a blank frame");
+	my $html = $chart{$id} // '';
+	unlike($html, qr/<svg/, "$id is not rendered as a blank frame");
+	like($html, qr/\Q$EMPTY_TEXT{$id}\E/, "$id explains why it is empty");
 }
 
 restore_all();
