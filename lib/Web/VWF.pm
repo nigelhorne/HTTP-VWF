@@ -1,5 +1,8 @@
 package Web::VWF;
 
+# The distribution's version: Makefile.PL reads it from here
+our $VERSION = '0.01';
+
 # njh@nigelhorne.com
 
 use strict;

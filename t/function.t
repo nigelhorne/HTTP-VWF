@@ -2128,9 +2128,13 @@ subtest 'Web::VWF::Display::meta_data' => sub {
 		is($display->html(vwf_log => $rows), 'page', 'rendered');
 		like($seen{'browser_chart'}, qr/id="browser_chart"/, 'browser chart');
 		like($seen{'status_chart'}, qr/id="status_chart"/, 'status chart');
+		# Two snippets both declare "const data", so each script needs its own
+		# scope or the second chart throws and draws nothing
+		like($seen{'browser_chart'}, qr/\(function \(\) \{.*\}\)\(\);/s, 'browser chart script scoped');
+		like($seen{'status_chart'}, qr/\(function \(\) \{.*\}\)\(\);/s, 'status chart script scoped');
 		like($seen{'rate_chart'}, qr/id="rate_chart"/, 'rate chart');
 		like($seen{'latency_chart'}, qr/id="latency_chart"/, 'latency chart');
-		is($seen{'slow_chart'}, '', 'no slow chart from two samples');
+		like($seen{'slow_chart'}, qr/Not enough data yet/, 'placeholder instead of an empty slow panel');
 		is_deeply($seen{'server'}, { cpu_count => 1 }, 'server metrics');
 		throws_ok { $display->html() } qr/\AMissing 'vwf_log' handle/, 'log required';
 		restore_all();

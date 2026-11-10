@@ -71,29 +71,31 @@ sub html {
 	# as an empty frame.
 	my $charts = HTML::D3->new(width => 800, height => 400);
 	my $browser_chart = (grep { $_->[1] } @browser)
-		? $charts->render_pie_chart_snippet({ data => \@browser, id => 'browser_chart', donut => 1, sort_slices => 'value' })->{'html'}
+		? _scoped_snippet($charts->render_pie_chart_snippet({ data => \@browser, id => 'browser_chart', donut => 1, sort_slices => 'value' }))
 		: '';
 	my $status_chart = @status
-		? $charts->render_pie_chart_snippet({ data => \@status, id => 'status_chart', donut => 1, sort_slices => 'label' })->{'html'}
+		? _scoped_snippet($charts->render_pie_chart_snippet({ data => \@status, id => 'status_chart_renamed', donut => 1, sort_slices => 'label' }))
 		: '';
 	my $rate_chart = @{$rate_24h->{'total'}}
-		? $charts->render_multi_series_line_chart_snippet({
+		? _scoped_snippet($charts->render_multi_series_line_chart_snippet({
 			series_data => _series(['Requests', $rate_24h->{'total'}], ['Errors', $rate_24h->{'errors'}]),
 			id => 'rate_chart', x_label => 'Hour', y_label => 'Requests',
-		})->{'html'}
+		}))
 		: '';
 	my $latency_chart = @{$latency_24h->{'avg'}}
-		? $charts->render_multi_series_line_chart_snippet({
+		? _scoped_snippet($charts->render_multi_series_line_chart_snippet({
 			series_data => _series(['Average', $latency_24h->{'avg'}], ['P95', $latency_24h->{'p95'}]),
 			id => 'latency_chart', x_label => 'Hour', y_label => 'Milliseconds',
-		})->{'html'}
+		}))
 		: '';
 	my $slow_chart = @{$slow}
-		? $charts->render_bar_chart_snippet({
+		? _scoped_snippet($charts->render_bar_chart_snippet({
 			data => $slow, id => 'slow_chart', orientation => 'horizontal',
 			sort_bars => 'value', show_values => 1, value_label => 'ms',
-		})->{'html'}
-		: '';
+		}))
+		# Too few requests to rank anything is normal, not an error: say so
+		# rather than leaving a blank panel that looks like a broken chart
+		: '<p>Not enough data yet to rank endpoints.</p>';
 
 	return $self->SUPER::html({
 		server => $server_metrics,
@@ -119,6 +121,22 @@ sub _series
 			data => [ map { { label => $_->[0], value => $_->[1] } } @{$points} ],
 		}
 	} @series ];
+}
+
+# The pie snippet writes its script at the top level of the page, while the
+# line and bar snippets wrap theirs in a function.  Two pies on one page would
+# therefore both declare "const data": the second script dies with
+# "Identifier 'data' has already been declared" and leaves an empty frame.
+# Giving every snippet its own function makes them independent; the snippets
+# that already wrap themselves are simply wrapped twice, which is harmless.
+sub _scoped_snippet
+{
+	my ($result) = @_;
+
+	my $html = $result->{'html'};
+	$html =~ s{(<script\b[^>]*>)(.*?)(</script>)}{$1 . "(function () {\n" . $2 . "\n})();\n" . $3}gse;
+
+	return $html;
 }
 
 sub get_server_metrics {

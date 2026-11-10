@@ -51,5 +51,4 @@ schemas/
 CLAUDE.md
 
 # make dist / disttest
-/HTTP-VWF-*
-save_to
+Web-VWF-*
