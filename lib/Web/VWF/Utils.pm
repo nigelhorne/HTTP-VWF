@@ -1,4 +1,4 @@
-package HTTP::VWF::Utils;
+package Web::VWF::Utils;
 
 # VWF is licensed under GPL2.0 for personal use only
 # njh@nigelhorne.com
@@ -7,7 +7,7 @@ package HTTP::VWF::Utils;
 
 =head1 NAME
 
-HTTP::VWF::Utils - Random subroutines for VWF
+Web::VWF::Utils - Random subroutines for VWF
 
 =head1 DESCRIPTION
 

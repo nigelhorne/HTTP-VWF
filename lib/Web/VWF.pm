@@ -1,4 +1,4 @@
-package HTTP::VWF;
+package Web::VWF;
 
 # njh@nigelhorne.com
 
@@ -55,15 +55,15 @@ use autodie qw(:all);
 use lib CGI::Info::script_dir() . '/../lib';
 # use lib File::HomeDir->my_home() . '/lib/perl5';
 
-use HTTP::VWF::Allow;
-use HTTP::VWF::Blacklist;
-use HTTP::VWF::Config;
-use HTTP::VWF::Utils;
+use Web::VWF::Allow;
+use Web::VWF::Blacklist;
+use Web::VWF::Config;
+use Web::VWF::Utils;
 
 # Where the server keeps the configuration of the sites it serves: one directory
 # per site, named after the site, read when the site has no conf/ of its own
 # beside cgi-bin/.  A site whose host keeps them elsewhere changes this line and
-# nothing else - it is passed to HTTP::VWF->new() below, and to the page modules,
+# nothing else - it is passed to Web::VWF->new() below, and to the page modules,
 # so that both read the site's configuration from the same place.
 Readonly my $SERVER_CONF_DIR => '/usr/lib/vwf';
 
@@ -104,25 +104,25 @@ my $logger;
 # True while run() is executing, so that a nested call can be refused
 our $RUNNING;
 
-# my $pagename = "HTTP::VWF::Display::$script_name";
+# my $pagename = "Web::VWF::Display::$script_name";
 # eval "require $pagename";
 
 # Loaded later, only when needed
-# use HTTP::VWF::Display::index;
-# use HTTP::VWF::Display::upload;
-# use HTTP::VWF::Display::editor;
-# use HTTP::VWF::Display::meta_data;
+# use Web::VWF::Display::index;
+# use Web::VWF::Display::upload;
+# use Web::VWF::Display::editor;
+# use Web::VWF::Display::meta_data;
 
 # ── What a site declares, and what it gets if it declares nothing ───────────
 # The directory its databases are in, the data modules it loads, the languages
 # it offers and the addresses it allows or trusts are all site settings, read
-# from the domain's configuration file - see "Site Settings" in HTTP::VWF's
+# from the domain's configuration file - see "Site Settings" in Web::VWF's
 # documentation.  What is below is what this script used to hardcode, so a site
 # that says nothing behaves exactly as it did before.  The settings are resolved
 # by _site_setup() on the first request, because the configuration cannot be read
 # until the domain is known.
 Readonly my $DEFAULT_DATABASE_DIR => 'data';		# beside cgi-bin/
-Readonly my @DEFAULT_DATA_MODULES => qw(HTTP::VWF::Data::index);
+Readonly my @DEFAULT_DATA_MODULES => qw(Web::VWF::Data::index);
 Readonly my @DEFAULT_SUPPORTED_LANGUAGES => qw(en-gb);
 # One site's own address, kept so that a site that came from this script and says
 # nothing keeps working; a site that wants a different list sets allow_ips.
@@ -138,8 +138,8 @@ Readonly my @DEFAULT_RATE_LIMIT_TRUSTED_IPS => qw(127.0.0.1 192.168.1.1);
 # The access log is the one data module this script builds itself, because which
 # log to read comes from the vwflog setting; its class is loaded here so that
 # doit() can construct it without a compile-time use.
-require_module('HTTP::VWF::Data::vwf_log');
-HTTP::VWF::Data::vwf_log->import() if(HTTP::VWF::Data::vwf_log->can('import'));
+require_module('Web::VWF::Data::vwf_log');
+Web::VWF::Data::vwf_log->import() if(Web::VWF::Data::vwf_log->can('import'));
 
 # Resolved from the configuration by _site_setup(): the directory holding the
 # site's databases, and the data handles it declared, by the name each is passed
@@ -173,12 +173,12 @@ my %blacklisted_ip;
 my $rate_limit_cache;
 
 # The CGI::ACL object is built on the first request, once $config is loaded,
-# because the country blacklist (HTTP::VWF::Blacklist) can come from the config file.
+# because the country blacklist (Web::VWF::Blacklist) can come from the config file.
 my $acl;
 
 =head1 DESCRIPTION
 
-HTTP::VWF is L<VWF|https://github.com/nigelhorne/vwf>, the Versatile Web
+Web::VWF is L<VWF|https://github.com/nigelhorne/vwf>, the Versatile Web
 Framework, packaged as a CPAN distribution.  It is an MVC framework for
 building responsive websites that adapt to the client's language, to the kind
 of client (web, mobile, robot, search engine or AI crawler) and to whichever
@@ -191,34 +191,34 @@ does these modules:
 
 =over 4
 
-=item L<HTTP::VWF::Display>
+=item L<Web::VWF::Display>
 
 The page renderer.  Given the configuration, the browser's language and the
 kind of client it is, it finds the right template for a page and renders it.
 A site subclasses it for each of its pages.
 
-=item L<HTTP::VWF::Config>
+=item L<Web::VWF::Config>
 
 Reads the site's XML configuration.
 
-=item L<HTTP::VWF::Allow>
+=item L<Web::VWF::Allow>
 
 Access control and rate limiting.
 
-=item L<HTTP::VWF::Blacklist>
+=item L<Web::VWF::Blacklist>
 
-The country blacklist, shared by the page script, L<HTTP::VWF::Allow> and
-L<HTTP::VWF::Display>.
+The country blacklist, shared by the page script, L<Web::VWF::Allow> and
+L<Web::VWF::Display>.
 
-=item L<HTTP::VWF::Utils>
+=item L<Web::VWF::Utils>
 
 Cache initialisation and the Haversine distance calculation.
 
-=item L<HTTP::VWF::CAPTCHA>
+=item L<Web::VWF::CAPTCHA>
 
 reCAPTCHA integration and the bypass that follows a solved challenge.
 
-=item L<HTTP::VWF::Data::E<lt>sourceE<gt>>
+=item L<Web::VWF::Data::E<lt>sourceE<gt>>
 
 The data access layer: CSV, XML and SQLite, through Database::Abstraction.
 
@@ -231,19 +231,19 @@ new one.  F<examples/basic-site/> is that site laid out on its own - the script,
 the configuration, the templates and the data - and its F<README.md> documents
 it as an example to copy: where a site's configuration is read from, what
 C<root_dir> is, and how to run it before it is deployed.  F<examples/links.nigelhorne.com/>
-is the other kind of site: one page of its own, a C<HTTP::VWF::Display>
+is the other kind of site: one page of its own, a C<Web::VWF::Display>
 subclass whose answer is a redirect rather than a rendering of a template, and
 whose own script it keeps - the example documents the four changes to this one
 that it takes, and why.
 
 A site's templates sit under a path built from the page's class name,
-so the file to change when the page module is C<HTTP::VWF::Display::index> is
-F<templates/en/web/HTTP/VWF/Display/index.tmpl> - see L<HTTP::VWF::Display>
+so the file to change when the page module is C<Web::VWF::Display::index> is
+F<templates/en/web/HTTP/VWF/Display/index.tmpl> - see L<Web::VWF::Display>
 for the rest of the search order.  F<CLAUDE.md> records how a request is handled
 once it arrives.
 
 A site that used to carry a renamed copy of VWF of its own deletes that copy,
-installs this distribution, renames C<VWF::> to C<HTTP::VWF::> in its own code,
+installs this distribution, renames C<VWF::> to C<Web::VWF::> in its own code,
 and moves its templates from C<.../VWF/Display/> to C<.../HTTP/VWF/Display/>.
 
 =head1 SUBROUTINES/METHODS
@@ -263,7 +263,7 @@ other root can be named here - F</etc/vwf>, F</usr/local/etc/vwf> - and the
 default is F</usr/lib/vwf>.  Optional.
 
 =item * C<info>, C<logger>, C<config_directory>, C<config_file>, C<config> -
-handed to L<HTTP::VWF::Config>, which describes them.
+handed to L<Web::VWF::Config>, which describes them.
 
 =back
 
@@ -271,8 +271,8 @@ handed to L<HTTP::VWF::Config>, which describes them.
 
 sub new
 {
-	my ($proto, @args) = @_;
-	my $params = Params::Get::get_params('directory', @_);
+	my $proto = shift;
+	my $params = Params::Get::get_params(undef, @_) // {};
 
 	my $class = ref($proto) || $proto;
 
@@ -289,7 +289,7 @@ sub new
 =head2 directory
 
 The directory the server keeps this site's configuration in: what C<new()> was
-given, or F</usr/lib/vwf>.  L<HTTP::VWF::Config> adds the site's own name to it.
+given, or F</usr/lib/vwf>.  L<Web::VWF::Config> adds the site's own name to it.
 
 =cut
 
@@ -297,14 +297,14 @@ sub _directory
 {
 	my $self = shift;
 
-	return $self->{'directory'} // $ENV{root_dir} // $HTTP::VWF::Config::DEFAULT_DIRECTORY;
+	return $self->{'directory'} // $ENV{root_dir} // $Web::VWF::Config::DEFAULT_DIRECTORY;
 }
 
 =head2 config
 
 The site's configuration, read once and kept: a site that has no F<conf/> of its
 own beside F<cgi-bin/> is configured from the server's directory for it, and
-L<HTTP::VWF::Config> describes the rest of the search.
+L<Web::VWF::Config> describes the rest of the search.
 
 =cut
 
@@ -312,7 +312,7 @@ sub _config
 {
 	my $self = shift;
 
-	return $self->{'config'} ||= HTTP::VWF::Config->new({
+	return $self->{'config'} ||= Web::VWF::Config->new({
 		%{$self->{'params'}},
 		directory => $self->_directory(),
 	});
@@ -442,7 +442,6 @@ sub run
 	# my $request = FCGI::Request($stdin, $stdout, $stderr);
 	my $request = FCGI::Request();
 
-warn('YYYYYYYYYYY');
 	# ─── Main FCGI request loop ───────────────────────────────────────────────────
 	# Accept() blocks until the web server sends a new request.  It returns a
 	# negative value when the server wants this worker to exit (e.g. graceful
@@ -548,11 +547,11 @@ sub _doit
 	# $config is built once per process and reused.  We cannot build it before
 	# the first Accept() because the domain name is not known until then.
 	# So don't pass $info in since it was created before the connection
-	$config ||= HTTP::VWF::Config->new({
+	$config ||= Web::VWF::Config->new({
 		directory => $self->_directory(),
 		logger => $logger,
 		debug => $params{'debug'},
-		# A throwaway CGI::Lingua is used here only to satisfy HTTP::VWF::Config;
+		# A throwaway CGI::Lingua is used here only to satisfy Web::VWF::Config;
 		# the real, cache-backed instance is created further below.  It has to be
 		# given the default languages rather than the site's configured ones:
 		# this call is what reads the configuration, so the site's list is not
@@ -571,13 +570,13 @@ sub _doit
 	# site allows here is still refused if its reverse DNS says it is in a cloud.
 	$acl ||= CGI::ACL->new()
 		->deny_cloud()
-		->deny_country(country => HTTP::VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->countries());
+		->deny_country(country => Web::VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->countries());
 
-	foreach my $ip (config_list($config, 'allow_ips', @DEFAULT_ALLOW_IPS)) {
+	foreach my $ip ($self->_config_list($config, 'allow_ips', @DEFAULT_ALLOW_IPS)) {
 		$acl->allow_ip($ip);
 	}
 
-	@valid_pages = valid_pages($config) unless(@valid_pages);
+	@valid_pages = $self->_valid_pages($config) unless(@valid_pages);
 
 	# The CGI::Info disc cache stores parsed request data across FCGI restarts.
 	$info_cache ||= create_disc_cache(config => $config, logger => $logger, namespace => 'CGI::Info');
@@ -627,14 +626,14 @@ sub _doit
 
 	# Check if this is a CAPTCHA verification attempt
 	if ($info->param('g-recaptcha-response')) {
-		unless(HTTP::VWF::CAPTCHA->can('new')) {
-			require HTTP::VWF::CAPTCHA;
-			HTTP::VWF::CAPTCHA->import();
+		unless(Web::VWF::CAPTCHA->can('new')) {
+			require Web::VWF::CAPTCHA;
+			Web::VWF::CAPTCHA->import();
 		}
 
 		my $recaptcha_config = $config->recaptcha();
 		if ($recaptcha_config && $recaptcha_config->{enabled}) {
-			my $captcha = HTTP::VWF::CAPTCHA->new(
+			my $captcha = Web::VWF::CAPTCHA->new(
 				site_key => $recaptcha_config->{site_key},
 				secret_key => $recaptcha_config->{secret_key},
 				logger => $logger
@@ -680,7 +679,7 @@ sub _doit
 	$vwflog ||= $config->vwflog() || File::Spec->catfile($info->logdir(), 'vwf.log');
 	# Reader for the CSV access log, used by the meta_data page.
 	# Created from the same path that vwflog() writes to, which needs $config.
-	$self->{vwf_log} ||= HTTP::VWF::Data::vwf_log->new({
+	$self->{vwf_log} ||= Web::VWF::Data::vwf_log->new({
 		directory => dirname($vwflog),
 		filename => basename($vwflog),
 		no_entry => 1,
@@ -713,11 +712,11 @@ sub _doit
 				$logger->warn("Hard rate limit exceeded for $client_ip ($request_count requests)");
 				$info->status(429);
 
-				unless(HTTP::VWF::Display::captcha->can('new')) {
-					require HTTP::VWF::Display::captcha;
-					HTTP::VWF::Display::captcha->import();
+				unless(Web::VWF::Display::captcha->can('new')) {
+					require Web::VWF::Display::captcha;
+					Web::VWF::Display::captcha->import();
 				}
-				my $display = HTTP::VWF::Display::captcha->new({
+				my $display = Web::VWF::Display::captcha->new({
 					cachedir => $cachedir,
 					info => $info,
 					logger => $logger,
@@ -750,11 +749,11 @@ sub _doit
 				$logger->info("Soft rate limit exceeded for $client_ip ($request_count requests) - CAPTCHA challenge issued");
 				$info->status(429);
 
-				unless(HTTP::VWF::Display::captcha->can('new')) {
-					require HTTP::VWF::Display::captcha;
-					HTTP::VWF::Display::captcha->import();
+				unless(Web::VWF::Display::captcha->can('new')) {
+					require Web::VWF::Display::captcha;
+					Web::VWF::Display::captcha->import();
 				}
-				my $display = HTTP::VWF::Display::captcha->new({
+				my $display = Web::VWF::Display::captcha->new({
 					cachedir => $cachedir,
 					info => $info,
 					logger => $logger,
@@ -791,7 +790,7 @@ sub _doit
 	# Three independent checks are run in order of cheapness:
 	#   1. CGI::ACL — cloud ranges, country blocks, explicit IP allow/deny.
 	#   2. blacklisted() — in-process IP set built from prior SQL-injection attempts.
-	#   3. HTTP::VWF::Allow — DShield feed, user-agent blacklist, throttler, IDS.
+	#   3. Web::VWF::Allow — DShield feed, user-agent blacklist, throttler, IDS.
 	if(my $remote_addr = $ENV{'REMOTE_ADDR'}) {
 		my $reason;
 		if($acl->all_denied(lingua => $lingua)) {
@@ -799,17 +798,17 @@ sub _doit
 		} elsif(blacklisted($info)) {
 			$reason = 'Blacklisted for attempting to break in';
 		} else {
-			# HTTP::VWF::Allow may throw an Error object when it blocks a request.
+			# Web::VWF::Allow may throw an Error object when it blocks a request.
 			# Catch it here so the 403 response is sent rather than propagating.
 			try {
-				unless(HTTP::VWF::Allow::allow({
+				unless(Web::VWF::Allow::allow({
 					info   => $info,
 					lingua => $lingua,
 					logger => $logger,
 					cache  => $rate_limit_cache,
 					config => $config,
 				})) {
-					$reason = 'Blocked by HTTP::VWF::Allow';
+					$reason = 'Blocked by Web::VWF::Allow';
 				}
 			} catch Error with {
 				$reason = shift;
@@ -883,12 +882,12 @@ sub _doit
 		}
 	}
 
-	# $display holds the instantiated HTTP::VWF::Display subclass when the page is
+	# $display holds the instantiated Web::VWF::Display subclass when the page is
 	# found; $invalidpage is set when the page name is invalid or unloadable.
 	my $display;
 	my $invalidpage;
 
-	# Arguments forwarded to every HTTP::VWF::Display subclass constructor.  The
+	# Arguments forwarded to every Web::VWF::Display subclass constructor.  The
 	# server's directory is among them because a page reads its configuration for
 	# itself, and has to look where this script did.
 	$args = {
@@ -932,7 +931,7 @@ sub _doit
 			# Already rejected above
 		} elsif(!grep { $_ eq $page } @valid_pages) {
 			# Only pages on the allow-list are loaded, so that no other
-			# HTTP::VWF::Display::* module that happens to be on @INC (e.g. under
+			# Web::VWF::Display::* module that happens to be on @INC (e.g. under
 			# ~/lib/perl5) can be reached from the query string.
 			$logger->info("Unknown page $page");
 			$invalidpage = 1;
@@ -940,7 +939,7 @@ sub _doit
 				$info->status(404);
 			}
 		} else {
-			my $display_module = "HTTP::VWF::Display::$page";
+			my $display_module = "Web::VWF::Display::$page";
 
 			$logger->debug("doit(): Loading module $display_module from @INC");
 			unless($display_module->can('new')) {
@@ -1010,7 +1009,7 @@ sub _doit
 		$self->_vwflog($vwflog, $info, $lingua, $syslog, '', $log, $request_start);
 	} elsif($invalidpage) {
 		if($info->status() == 429) {
-			# Throttled by HTTP::VWF::Display
+			# Throttled by Web::VWF::Display
 			my $interval = $config->{'throttle'}->{'interval'} // 90;
 			send_error(status => 429, body => "Too many requests - try again later\n", headers => "Retry-After: $interval\n", buffered => 1);
 			$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Throttled', $log, $request_start);
@@ -1118,9 +1117,9 @@ sub send_error
 # were written and in the order they were written, with repetitions dropped, and
 # a setting that is present but empty means no values at all - so that a site can
 # say "none" as well as saying nothing.
-sub config_list
+sub _config_list
 {
-	my ($config, $key, @defaults) = @_;
+	my ($self, $config, $key, @defaults) = @_;
 
 	my $value = $config->{$key};
 	return @defaults unless(defined($value));
@@ -1145,14 +1144,16 @@ sub config_list
 # (<pages>index, meta_data</pages>); otherwise every ../lib/HTTP/VWF/Display/*.pm
 # next to this script is allowed, except captcha, which only the rate limiter
 # shows.
-sub valid_pages
+sub _valid_pages
 {
+	my $self = shift;
 	my $config = shift;
 
-	my @pages = config_list($config, 'pages');
+	my @pages = $self->_config_list($config, 'pages');
 	return grep { /\A\w+\z/ } @pages if(@pages);
 
-	my $dir = File::Spec->catdir($script_dir, File::Spec->updir(), 'lib', 'HTTP', 'VWF', 'Display');
+	# FIXME: Remove the hard coding
+	my $dir = File::Spec->catdir($script_dir, File::Spec->updir(), 'lib', 'Web', 'VWF', 'Display');
 	return sort(grep { $_ ne 'captcha' } map { basename($_, '.pm') } glob(File::Spec->catfile($dir, '*.pm')));
 }
 
@@ -1187,16 +1188,16 @@ sub _site_setup
 
 	# The languages the site offers.  CGI::Lingua negotiates within this list, so
 	# listing a language is what makes that language's templates reachable.
-	@supported_languages = config_list($config, 'supported_languages', @DEFAULT_SUPPORTED_LANGUAGES);
+	@supported_languages = $self->_config_list($config, 'supported_languages', @DEFAULT_SUPPORTED_LANGUAGES);
 
 	# Addresses exempt from rate limiting
-	@rate_limit_trusted_ips = config_list($config, 'rate_limit_trusted_ips', @DEFAULT_RATE_LIMIT_TRUSTED_IPS);
+	@rate_limit_trusted_ips = $self->_config_list($config, 'rate_limit_trusted_ips', @DEFAULT_RATE_LIMIT_TRUSTED_IPS);
 
 	# The site's data modules.  Each is loaded, constructed with ->new() and
 	# given to every page under the last part of its name, lower-cased:
 	# HTTP::VWF::Data::index arrives at a page as index, and a site's own
 	# Bands::Data::bands as bands.
-	foreach my $module (config_list($config, 'data_modules', @DEFAULT_DATA_MODULES)) {
+	foreach my $module ($self->_config_list($config, 'data_modules', @DEFAULT_DATA_MODULES)) {
 		my $handle;
 		eval {
 			require_module($module);

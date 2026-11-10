@@ -1,4 +1,4 @@
-package HTTP::VWF::Throttle;
+package Web::VWF::Throttle;
 
 # A Data::Throttler backend that keeps the throttle store intact where file
 # locks are mandatory.
@@ -9,7 +9,7 @@ package HTTP::VWF::Throttle;
 # locks are mandatory: as the documentation for LockFileEx puts it, "if the
 # locking process opens the file a second time, it cannot access the specified
 # region through this second handle".  Every read and every write through the
-# new handle therefore fails there, HTTP::VWF::Display catches the exception and
+# new handle therefore fails there, Web::VWF::Display catches the exception and
 # removes the store it thinks is corrupt, and throttling quietly stops working -
 # which is a security feature turning itself off on one platform, silently.
 #
@@ -30,7 +30,7 @@ our $VERSION = '0.01';
 
 =head1 NAME
 
-HTTP::VWF::Throttle - persistent request throttling that works on Windows too
+Web::VWF::Throttle - persistent request throttling that works on Windows too
 
 =head1 VERSION
 
@@ -39,7 +39,7 @@ Version 0.01
 =head1 SYNOPSIS
 
 	use Data::Throttler;
-	use HTTP::VWF::Throttle;	# Defines the 'VWF' backend
+	use Web::VWF::Throttle;	# Defines the 'VWF' backend
 
 	my $throttler = Data::Throttler->new(
 		max_items => 30,
@@ -115,7 +115,7 @@ protected, rather than here.
 =head1 METHODS
 
 These are the methods of C<Data::Throttler::Backend::VWF>, not of
-C<HTTP::VWF::Throttle> itself, which exists only to load them.
+C<Web::VWF::Throttle> itself, which exists only to load them.
 
 =head2 load
 
@@ -185,7 +185,7 @@ sub load
 
 Purpose: whether the store holds a bucket chain that can be reused.
 
-An unreadable or unparsable store used to be deleted by C<HTTP::VWF::Display>
+An unreadable or unparsable store used to be deleted by C<Web::VWF::Display>
 so that the next request would write a fresh one.  That deletion is gone, so the
 rebuild happens here: a false return makes C<Data::Throttler> create the chain
 again and save it over the unusable file, without a moment in which another

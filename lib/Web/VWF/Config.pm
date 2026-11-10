@@ -1,4 +1,4 @@
-package HTTP::VWF::Config;
+package Web::VWF::Config;
 
 # VWF is licensed under GPL2.0 for personal use only
 # njh@bandsman.co.uk
@@ -25,7 +25,7 @@ use Params::Get 0.13;
 
 =head1 NAME
 
-HTTP::VWF::Config - Site-independent configuration file for the Versatile Web Framework
+Web::VWF::Config - Site-independent configuration file for the Versatile Web Framework
 
 =head1 VERSION
 
@@ -36,14 +36,14 @@ Version 0.01
 our $VERSION = '0.01';
 
 # Where the server keeps one configuration directory per site, named after the
-# site - see HTTP::VWF::directory()
+# site - see Web::VWF::directory()
 our $DEFAULT_DIRECTORY = '/usr/lib/vwf';
 
 =head1 SUBROUTINES/METHODS
 
 =head2 new
 
-Creates a new HTTP::VWF::Config instance with hierarchical configuration loading.
+Creates a new Web::VWF::Config instance with hierarchical configuration loading.
 
 Takes four optional arguments:
 	info (CGI::Info object)

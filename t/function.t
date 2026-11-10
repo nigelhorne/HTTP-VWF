@@ -53,20 +53,20 @@ use LWP::UserAgent ();
 use XML::LibXML ();
 use YAML ();
 
-use HTTP::VWF;
-use HTTP::VWF::Allow;
-use HTTP::VWF::Blacklist;
-use HTTP::VWF::CAPTCHA;
-use HTTP::VWF::Config;
-use HTTP::VWF::Data::index;
-use HTTP::VWF::Data::vwf_log;
-use HTTP::VWF::Display;
-use HTTP::VWF::Display::captcha;
-use HTTP::VWF::Display::index;
-use HTTP::VWF::Display::meta_data;
-use HTTP::VWF::Display::table;
-use HTTP::VWF::Throttle;
-use HTTP::VWF::Utils;
+use Web::VWF;
+use Web::VWF::Allow;
+use Web::VWF::Blacklist;
+use Web::VWF::CAPTCHA;
+use Web::VWF::Config;
+use Web::VWF::Data::index;
+use Web::VWF::Data::vwf_log;
+use Web::VWF::Display;
+use Web::VWF::Display::captcha;
+use Web::VWF::Display::index;
+use Web::VWF::Display::meta_data;
+use Web::VWF::Display::table;
+use Web::VWF::Throttle;
+use Web::VWF::Utils;
 
 # ---------------------------------------------------------------------------
 # Fixed values shared by the tests.  Addresses come from the documentation
@@ -315,7 +315,7 @@ sub make_display
 
 	my $info = delete $args{'info'} // Local::Info->new();
 	my $config = delete $args{'config'} // { security => { csrf => { secret => $CONFIG{'csrf_secret'} } } };
-	my $class = delete $args{'class'} // 'HTTP::VWF::Display';
+	my $class = delete $args{'class'} // 'Web::VWF::Display';
 	return bless {
 		info => $info,
 		_info => $info,
@@ -326,14 +326,14 @@ sub make_display
 }
 
 # ===========================================================================
-subtest 'HTTP::VWF::Blacklist' => sub {
+subtest 'Web::VWF::Blacklist' => sub {
 	fresh();
 
 	subtest 'new - default list' => sub {
 		# Without configuration the built-in list applies, and every entry
 		# must come back normalised to upper case and sorted
-		my $bl = HTTP::VWF::Blacklist->new();
-		isa_ok($bl, 'HTTP::VWF::Blacklist');
+		my $bl = Web::VWF::Blacklist->new();
+		isa_ok($bl, 'Web::VWF::Blacklist');
 		my $countries = $bl->countries();
 		returns_ok($countries, { type => 'arrayref' }, 'countries() returns an arrayref');
 		is_deeply($countries, [sort qw(BY MD RU CN BR UY TR MA VE SA CY CO MX IN RS PK UA XH)], 'built-in list');
@@ -344,11 +344,11 @@ subtest 'HTTP::VWF::Blacklist' => sub {
 	subtest 'new - string and arrayref forms' => sub {
 		# Configuration files give either a list or "CN, RU": both must give
 		# the same, case-normalised result
-		is_deeply(HTTP::VWF::Blacklist->new(countries => 'ru, cn')->countries(), ['CN', 'RU'], 'comma/space string');
-		is_deeply(HTTP::VWF::Blacklist->new({ countries => ['ru', 'Cn'] })->countries(), ['CN', 'RU'], 'arrayref, hashref call style');
-		is_deeply(HTTP::VWF::Blacklist->new(countries => ['CN', 'cn', 'Cn'])->countries(), ['CN'], 'duplicates collapse');
-		is_deeply(HTTP::VWF::Blacklist->new(countries => [])->countries(), [], 'explicitly empty list blocks nobody');
-		is_deeply(HTTP::VWF::Blacklist->new(countries => ',, ,')->countries(), [], 'separators only blocks nobody');
+		is_deeply(Web::VWF::Blacklist->new(countries => 'ru, cn')->countries(), ['CN', 'RU'], 'comma/space string');
+		is_deeply(Web::VWF::Blacklist->new({ countries => ['ru', 'Cn'] })->countries(), ['CN', 'RU'], 'arrayref, hashref call style');
+		is_deeply(Web::VWF::Blacklist->new(countries => ['CN', 'cn', 'Cn'])->countries(), ['CN'], 'duplicates collapse');
+		is_deeply(Web::VWF::Blacklist->new(countries => [])->countries(), [], 'explicitly empty list blocks nobody');
+		is_deeply(Web::VWF::Blacklist->new(countries => ',, ,')->countries(), [], 'separators only blocks nobody');
 	};
 
 	subtest 'new - hostile entries are refused' => sub {
@@ -356,31 +356,31 @@ subtest 'HTTP::VWF::Blacklist' => sub {
 		# or a typo in the configuration would quietly unblock a country
 		foreach my $bad ('CHN', 'C', '1A', 'C-', "CN\n", "C\x{c7}", 'C N') {
 			(my $printable = $bad) =~ s/([^\x20-\x7e])/sprintf('\\x{%x}', ord($1))/ge;
-			croaks_with(sub { HTTP::VWF::Blacklist->new(countries => [$bad]) },
+			croaks_with(sub { Web::VWF::Blacklist->new(countries => [$bad]) },
 				"Invalid country code '$bad' in the blacklist", "rejects '$printable'");
 		}
-		croaks_with(sub { HTTP::VWF::Blacklist->new(countries => 'CN, RUS') },
+		croaks_with(sub { Web::VWF::Blacklist->new(countries => 'CN, RUS') },
 			"Invalid country code 'RUS' in the blacklist", 'one bad entry in a string spoils it');
-		throws_ok { HTTP::VWF::Blacklist->new(countries => { CN => 1 }) } qr/countries/, 'hashref refused by the schema';
-		throws_ok { HTTP::VWF::Blacklist->new(countries => \'CN') } qr/countries/, 'scalar ref refused by the schema';
-		throws_ok { HTTP::VWF::Blacklist->new(bogus => 1) } qr/bogus/, 'unknown parameter refused';
+		throws_ok { Web::VWF::Blacklist->new(countries => { CN => 1 }) } qr/countries/, 'hashref refused by the schema';
+		throws_ok { Web::VWF::Blacklist->new(countries => \'CN') } qr/countries/, 'scalar ref refused by the schema';
+		throws_ok { Web::VWF::Blacklist->new(bogus => 1) } qr/bogus/, 'unknown parameter refused';
 	};
 
 	subtest 'new - validation failure propagates' => sub {
 		# If the validator itself fails, construction must fail with it
 		# rather than fall back to some default list
 		mock_exception 'Params::Validate::Strict::validate_strict' => 'validator broke';
-		throws_ok { HTTP::VWF::Blacklist->new() } qr/\Avalidator broke/, 'validator exception is not swallowed';
+		throws_ok { Web::VWF::Blacklist->new() } qr/\Avalidator broke/, 'validator exception is not swallowed';
 		restore_all();
 
 		my $spy = spy 'Params::Validate::Strict::validate_strict';
-		HTTP::VWF::Blacklist->new(countries => 'CN');
+		Web::VWF::Blacklist->new(countries => 'CN');
 		cmp_ok(scalar($spy->()), '>=', 1, 'every construction is validated');
 		restore_all();
 	};
 
 	subtest 'is_blocked' => sub {
-		my $bl = HTTP::VWF::Blacklist->new(countries => ['CN']);
+		my $bl = Web::VWF::Blacklist->new(countries => ['CN']);
 		returns_is($bl->is_blocked('CN'), { type => 'integer', min => 1, max => 1 }, 'blocked returns 1');
 		is($bl->is_blocked('cn'), 1, 'case-insensitive');
 		returns_is($bl->is_blocked('GB'), { type => 'integer', min => 0, max => 0 }, 'other country returns 0');
@@ -398,15 +398,15 @@ subtest 'HTTP::VWF::Blacklist' => sub {
 
 	subtest 'objects are independent' => sub {
 		# Each object owns its list, so one site cannot change another's
-		my $one = HTTP::VWF::Blacklist->new(countries => ['CN']);
-		my $two = HTTP::VWF::Blacklist->new(countries => ['RU']);
+		my $one = Web::VWF::Blacklist->new(countries => ['CN']);
+		my $two = Web::VWF::Blacklist->new(countries => ['RU']);
 		is($one->is_blocked('RU'), 0, 'first object unaffected by second');
 		is($two->is_blocked('CN'), 0, 'second object unaffected by first');
 	};
 
 	subtest 'countries - returns a copy' => sub {
 		# A caller editing the returned list must not change what is blocked
-		my $bl = HTTP::VWF::Blacklist->new(countries => ['CN']);
+		my $bl = Web::VWF::Blacklist->new(countries => ['CN']);
 		my $list = $bl->countries();
 		push @{$list}, 'GB';
 		@{$list} = ();
@@ -416,7 +416,7 @@ subtest 'HTTP::VWF::Blacklist' => sub {
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Throttle (Data::Throttler::Backend::VWF)' => sub {
+subtest 'Web::VWF::Throttle (Data::Throttler::Backend::VWF)' => sub {
 	fresh();
 	my $class = 'Data::Throttler::Backend::VWF';
 	my $dir = tempdir(CLEANUP => 1);
@@ -582,16 +582,16 @@ subtest 'HTTP::VWF::Throttle (Data::Throttler::Backend::VWF)' => sub {
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Utils' => sub {
+subtest 'Web::VWF::Utils' => sub {
 	fresh();
 
 	subtest 'create_disc_cache / create_memory_cache' => sub {
 		# Both are thin wrappers: each must pass its own cache type and the
 		# caller's arguments, whichever calling style was used
 		my @calls;
-		mock 'HTTP::VWF::Utils::_create_cache' => sub { push @calls, [@_]; return 'cache' };
-		is(HTTP::VWF::Utils::create_disc_cache(config => { a => 1 }), 'cache', 'disc returns the cache');
-		is(HTTP::VWF::Utils::create_memory_cache({ config => { b => 2 } }), 'cache', 'memory returns the cache');
+		mock 'Web::VWF::Utils::_create_cache' => sub { push @calls, [@_]; return 'cache' };
+		is(Web::VWF::Utils::create_disc_cache(config => { a => 1 }), 'cache', 'disc returns the cache');
+		is(Web::VWF::Utils::create_memory_cache({ config => { b => 2 } }), 'cache', 'memory returns the cache');
 		is_deeply(\@calls, [
 			['disc_cache', { config => { a => 1 } }],
 			['memory_cache', { config => { b => 2 } }],
@@ -600,16 +600,16 @@ subtest 'HTTP::VWF::Utils' => sub {
 	};
 
 	subtest 'create_* - config is not optional' => sub {
-		error_text_is(sub { HTTP::VWF::Utils::create_memory_cache(logger => Local::Logger->new()) },
+		error_text_is(sub { Web::VWF::Utils::create_memory_cache(logger => Local::Logger->new()) },
 			'config is not optional', 'memory cache without config');
-		error_text_is(sub { HTTP::VWF::Utils::create_disc_cache(config => undef) },
+		error_text_is(sub { Web::VWF::Utils::create_disc_cache(config => undef) },
 			'config is not optional', 'disc cache with undef config');
-		error_text_is(sub { HTTP::VWF::Utils::create_disc_cache(config => '') },
+		error_text_is(sub { Web::VWF::Utils::create_disc_cache(config => '') },
 			'config is not optional', 'disc cache with empty config');
 	};
 
 	subtest '_create_cache - real memory cache' => sub {
-		my $cache = HTTP::VWF::Utils::_create_cache('memory_cache', { config => {}, namespace => 'function-test' });
+		my $cache = Web::VWF::Utils::_create_cache('memory_cache', { config => {}, namespace => 'function-test' });
 		returns_ok($cache, { type => 'object', isa => 'CHI::Driver' }, 'returns a CHI driver');
 		$cache->set('k', 'v');
 		is($cache->get('k'), 'v', 'cache works');
@@ -618,8 +618,8 @@ subtest 'HTTP::VWF::Utils' => sub {
 	subtest '_create_cache - unavailable driver falls back' => sub {
 		# A configured driver that is not installed must not stop the site
 		my $logger = Local::Logger->new();
-		mock 'HTTP::VWF::Utils::_is_driver_available' => sub { return 0 };
-		my $cache = HTTP::VWF::Utils::_create_cache('memory_cache', { config => { memory_cache => { driver => 'Redis' } }, logger => $logger });
+		mock 'Web::VWF::Utils::_is_driver_available' => sub { return 0 };
+		my $cache = Web::VWF::Utils::_create_cache('memory_cache', { config => { memory_cache => { driver => 'Redis' } }, logger => $logger });
 		isa_ok($cache, 'CHI::Driver');
 		like($logger->messages('warn')->[0], qr/\ACHI driver Redis not available, falling back to Memory\z/, 'fallback logged');
 		restore_all();
@@ -629,23 +629,23 @@ subtest 'HTTP::VWF::Utils' => sub {
 		# CHI dying mid-construction must surface as a clear error, logged
 		my $logger = Local::Logger->new();
 		mock 'CHI::new' => sub { die "no shared memory\n" };
-		error_text_is(sub { HTTP::VWF::Utils::_create_cache('memory_cache', { config => {}, logger => $logger }) },
+		error_text_is(sub { Web::VWF::Utils::_create_cache('memory_cache', { config => {}, logger => $logger }) },
 			"Failed to create memory_cache cache with driver Memory: no shared memory\n", 'exception text');
 		is(scalar(@{$logger->messages('error')}), 1, 'error logged once');
 		restore_all();
 	};
 
 	subtest '_validate_cache_config' => sub {
-		lives_ok { HTTP::VWF::Utils::_validate_cache_config({}, 'disc_cache') } 'absent section is fine';
-		lives_ok { HTTP::VWF::Utils::_validate_cache_config({ disc_cache => { driver => 'File', port => 80, shm_size => 1, max_size => 1 } }, 'disc_cache') } 'valid section';
+		lives_ok { Web::VWF::Utils::_validate_cache_config({}, 'disc_cache') } 'absent section is fine';
+		lives_ok { Web::VWF::Utils::_validate_cache_config({ disc_cache => { driver => 'File', port => 80, shm_size => 1, max_size => 1 } }, 'disc_cache') } 'valid section';
 
-		croaks_with(sub { HTTP::VWF::Utils::_validate_cache_config({ disc_cache => 'File' }, 'disc_cache') },
+		croaks_with(sub { Web::VWF::Utils::_validate_cache_config({ disc_cache => 'File' }, 'disc_cache') },
 			'Cache configuration must be a hash reference', 'string section');
-		croaks_with(sub { HTTP::VWF::Utils::_validate_cache_config({ disc_cache => [] }, 'disc_cache') },
+		croaks_with(sub { Web::VWF::Utils::_validate_cache_config({ disc_cache => [] }, 'disc_cache') },
 			'Cache configuration must be a hash reference', 'array section');
-		croaks_with(sub { HTTP::VWF::Utils::_validate_cache_config({ disc_cache => { driver => 'Evil' } }, 'disc_cache') },
+		croaks_with(sub { Web::VWF::Utils::_validate_cache_config({ disc_cache => { driver => 'Evil' } }, 'disc_cache') },
 			"Invalid driver 'Evil'. Valid drivers: Memory, BerkeleyDB, DBI, Redis, Memcached, SharedMem, File, Null", 'unknown driver');
-		croaks_with(sub { HTTP::VWF::Utils::_validate_cache_config({ disc_cache => { driver => 'memory' } }, 'disc_cache') },
+		croaks_with(sub { Web::VWF::Utils::_validate_cache_config({ disc_cache => { driver => 'memory' } }, 'disc_cache') },
 			"Invalid driver 'memory'. Valid drivers: Memory, BerkeleyDB, DBI, Redis, Memcached, SharedMem, File, Null", 'driver names are case-sensitive');
 
 		# Every way a number can be wrong, including a trailing newline that
@@ -654,59 +654,59 @@ subtest 'HTTP::VWF::Utils' => sub {
 			foreach my $bad (undef, '', 0, -1, '1.5', '80abc', 'abc', "80\n", ' 80', '0x50') {
 				my $label = defined($bad) ? "'$bad'" : 'undef';
 				$label =~ s/\n/\\n/g;
-				croaks_with(sub { HTTP::VWF::Utils::_validate_cache_config({ c => { $param => $bad } }, 'c') },
+				croaks_with(sub { Web::VWF::Utils::_validate_cache_config({ c => { $param => $bad } }, 'c') },
 					"$param must be a positive integer", "$param $label refused");
 			}
 		}
-		croaks_with(sub { HTTP::VWF::Utils::_validate_cache_config({ c => { port => $CONFIG{'max_valid_port'} + 1 } }, 'c') },
+		croaks_with(sub { Web::VWF::Utils::_validate_cache_config({ c => { port => $CONFIG{'max_valid_port'} + 1 } }, 'c') },
 			'Port must be between 1 and 65535', 'port out of range');
-		lives_ok { HTTP::VWF::Utils::_validate_cache_config({ c => { port => $CONFIG{'max_valid_port'} } }, 'c') } 'highest port allowed';
-		croaks_with(sub { HTTP::VWF::Utils::_validate_cache_config({ c => { driver => 'Memory', global => 1, datastore => {} } }, 'c') },
+		lives_ok { Web::VWF::Utils::_validate_cache_config({ c => { port => $CONFIG{'max_valid_port'} } }, 'c') } 'highest port allowed';
+		croaks_with(sub { Web::VWF::Utils::_validate_cache_config({ c => { driver => 'Memory', global => 1, datastore => {} } }, 'c') },
 			'Memory cache cannot have both global and datastore', 'global and datastore together');
 	};
 
 	subtest '_get_default_driver / _get_fallback_driver' => sub {
 		local $ENV{'TEST_DISC_CACHE_DRIVER'};
 		local $ENV{'TEST_MEMORY_CACHE_DRIVER'};
-		is(HTTP::VWF::Utils::_get_default_driver('disc_cache', undef), 'BerkeleyDB', 'disc default');
-		is(HTTP::VWF::Utils::_get_default_driver('memory_cache', undef), 'Memory', 'memory default');
+		is(Web::VWF::Utils::_get_default_driver('disc_cache', undef), 'BerkeleyDB', 'disc default');
+		is(Web::VWF::Utils::_get_default_driver('memory_cache', undef), 'Memory', 'memory default');
 		$ENV{'TEST_DISC_CACHE_DRIVER'} = 'Null';
-		is(HTTP::VWF::Utils::_get_default_driver('disc_cache', undef), 'Null', 'environment override');
+		is(Web::VWF::Utils::_get_default_driver('disc_cache', undef), 'Null', 'environment override');
 		$ENV{'TEST_DISC_CACHE_DRIVER'} = '';
-		is(HTTP::VWF::Utils::_get_default_driver('disc_cache', undef), 'BerkeleyDB', 'empty override ignored');
-		is(HTTP::VWF::Utils::_get_fallback_driver('disc_cache'), 'File', 'disc fallback');
-		is(HTTP::VWF::Utils::_get_fallback_driver('memory_cache'), 'Memory', 'memory fallback');
-		is(HTTP::VWF::Utils::_get_fallback_driver('anything else'), 'Memory', 'unknown type falls back to memory');
+		is(Web::VWF::Utils::_get_default_driver('disc_cache', undef), 'BerkeleyDB', 'empty override ignored');
+		is(Web::VWF::Utils::_get_fallback_driver('disc_cache'), 'File', 'disc fallback');
+		is(Web::VWF::Utils::_get_fallback_driver('memory_cache'), 'Memory', 'memory fallback');
+		is(Web::VWF::Utils::_get_fallback_driver('anything else'), 'Memory', 'unknown type falls back to memory');
 	};
 
 	subtest '_is_driver_available' => sub {
-		is(HTTP::VWF::Utils::_is_driver_available('Memory'), 1, 'Memory is built in');
-		is(HTTP::VWF::Utils::_is_driver_available('Null'), 1, 'Null is built in');
-		is(HTTP::VWF::Utils::_is_driver_available('File'), 1, 'File ships with CHI');
+		is(Web::VWF::Utils::_is_driver_available('Memory'), 1, 'Memory is built in');
+		is(Web::VWF::Utils::_is_driver_available('Null'), 1, 'Null is built in');
+		is(Web::VWF::Utils::_is_driver_available('File'), 1, 'File ships with CHI');
 
 		# A driver whose module cannot be loaded must be reported missing,
 		# not crash the caller
 		SKIP: {
 			skip('CHI::Driver::Memcached is installed', 1) if(CHI::Driver::Memcached->can('new'));
-			mock 'HTTP::VWF::Utils::require_module' => sub { die "Can't locate CHI/Driver/Memcached.pm\n" };
-			is(HTTP::VWF::Utils::_is_driver_available('Memcached'), 0, 'unloadable driver reported missing');
+			mock 'Web::VWF::Utils::require_module' => sub { die "Can't locate CHI/Driver/Memcached.pm\n" };
+			is(Web::VWF::Utils::_is_driver_available('Memcached'), 0, 'unloadable driver reported missing');
 			restore_all();
 		}
 
 		# The anchored match must not accept a name that merely contains one
-		mock 'HTTP::VWF::Utils::require_module' => sub { die 'should not get here' };
-		is(HTTP::VWF::Utils::_is_driver_available('MemoryX'), 1, 'unlisted names are left to the validator');
+		mock 'Web::VWF::Utils::require_module' => sub { die 'should not get here' };
+		is(Web::VWF::Utils::_is_driver_available('MemoryX'), 1, 'unlisted names are left to the validator');
 		restore_all();
 	};
 
 	subtest '_build_chi_args' => sub {
 		my $logger = Local::Logger->new();
-		my %args = HTTP::VWF::Utils::_build_chi_args('Null', {}, {}, undef, 'memory_cache');
+		my %args = Web::VWF::Utils::_build_chi_args('Null', {}, {}, undef, 'memory_cache');
 		is($args{'namespace'}, 'default', 'default namespace');
 		is($args{'on_get_error'}, 'warn', 'no logger: warn on get errors');
 		is($args{'on_set_error'}, 'die', 'no logger: die on set errors');
 
-		%args = HTTP::VWF::Utils::_build_chi_args('Null', {}, { namespace => 'ns' }, $logger, 'memory_cache');
+		%args = Web::VWF::Utils::_build_chi_args('Null', {}, { namespace => 'ns' }, $logger, 'memory_cache');
 		is($args{'namespace'}, 'ns', 'caller namespace');
 		$args{'on_get_error'}->('get went wrong');
 		$args{'on_set_error'}->('set went wrong');
@@ -719,152 +719,152 @@ subtest 'HTTP::VWF::Utils' => sub {
 		foreach my $driver (sort keys %route) {
 			my @called;
 			foreach my $routine (values %route) {
-				mock "HTTP::VWF::Utils::$routine" => sub { push @called, $routine };
+				mock "Web::VWF::Utils::$routine" => sub { push @called, $routine };
 			}
-			HTTP::VWF::Utils::_build_chi_args($driver, {}, {}, undef, 'c');
+			Web::VWF::Utils::_build_chi_args($driver, {}, {}, undef, 'c');
 			is_deeply(\@called, [$route{$driver}], "$driver routed to $route{$driver}");
 			restore_all();
 		}
 		my @called;
-		mock "HTTP::VWF::Utils::$_" => sub { push @called, 1 } foreach values %route;
-		HTTP::VWF::Utils::_build_chi_args('Null', {}, {}, undef, 'c');
+		mock "Web::VWF::Utils::$_" => sub { push @called, 1 } foreach values %route;
+		Web::VWF::Utils::_build_chi_args('Null', {}, {}, undef, 'c');
 		is(scalar(@called), 0, 'Null needs no configuration');
 		restore_all();
 	};
 
 	subtest '_configure_redis' => sub {
 		my %chi;
-		HTTP::VWF::Utils::_configure_redis(\%chi, { server => 'a:1, b:2', redis_options => { every => 5 } }, {}, undef);
+		Web::VWF::Utils::_configure_redis(\%chi, { server => 'a:1, b:2', redis_options => { every => 5 } }, {}, undef);
 		is_deeply($chi{'servers'}, ['a:1', 'b:2'], 'servers parsed and trimmed');
 		is($chi{'server'}, 'a:1', 'first server is primary');
 		is_deeply($chi{'redis_options'}, { reconnect => 60, every => 5, encoding => 'utf8' }, 'defaults with caller override');
 
 		%chi = ();
-		HTTP::VWF::Utils::_configure_redis(\%chi, {}, {}, undef);
+		Web::VWF::Utils::_configure_redis(\%chi, {}, {}, undef);
 		ok(!exists($chi{'servers'}), 'no servers configured, none invented');
-		throws_ok { HTTP::VWF::Utils::_configure_redis({}, { server => 'evil host:1' }, {}, undef) }
+		throws_ok { Web::VWF::Utils::_configure_redis({}, { server => 'evil host:1' }, {}, undef) }
 			qr/\AInvalid server format: 'evil host:1' \(expected host:port\)/, 'bad server propagates';
 	};
 
 	subtest '_configure_dbi' => sub {
-		croaks_with(sub { HTTP::VWF::Utils::_configure_dbi({}, {}, {}, undef) },
+		croaks_with(sub { Web::VWF::Utils::_configure_dbi({}, {}, {}, undef) },
 			"DBI driver requires 'connect' parameter", 'connect string required');
 
 		# A database that cannot be reached must be logged and fatal
 		my $logger = Local::Logger->new();
 		mock 'DBI::connect' => sub { die "connection refused\n" };
-		throws_ok { HTTP::VWF::Utils::_configure_dbi({ namespace => 'x' }, { connect => 'dbi:Nope:' }, {}, $logger) }
+		throws_ok { Web::VWF::Utils::_configure_dbi({ namespace => 'x' }, { connect => 'dbi:Nope:' }, {}, $logger) }
 			qr/\AFailed to connect to database: connection refused/, 'connect failure';
 		like($logger->messages('error')->[0], qr/\AFailed to connect to database: connection refused/, 'failure logged');
 		restore_all();
 
 		# Table names come from the namespace, so punctuation must go
 		mock 'DBI::connect' => sub { return bless({}, 'Local::DBH') };
-		my %chi = (namespace => 'HTTP::VWF::Allow; DROP TABLE x');
-		HTTP::VWF::Utils::_configure_dbi(\%chi, { connect => 'dbi:SQLite::memory:' }, {}, undef);
-		is($chi{'namespace'}, 'HTTP__VWF__Allow__DROP_TABLE_x', 'namespace reduced to word characters');
+		my %chi = (namespace => 'Web::VWF::Allow; DROP TABLE x');
+		Web::VWF::Utils::_configure_dbi(\%chi, { connect => 'dbi:SQLite::memory:' }, {}, undef);
+		is($chi{'namespace'}, 'Web__VWF__Allow__DROP_TABLE_x', 'namespace reduced to word characters');
 		isa_ok($chi{'dbh'}, 'Local::DBH');
 		is($chi{'create_table'}, 1, 'tables created by default');
 		%chi = (namespace => 'n');
-		HTTP::VWF::Utils::_configure_dbi(\%chi, { connect => 'dbi:SQLite::memory:', create_table => 0 }, {}, undef);
+		Web::VWF::Utils::_configure_dbi(\%chi, { connect => 'dbi:SQLite::memory:', create_table => 0 }, {}, undef);
 		is($chi{'create_table'}, 0, 'create_table => 0 respected, not defaulted');
 		restore_all();
 	};
 
 	subtest '_configure_shared_memory' => sub {
-		croaks_with(sub { HTTP::VWF::Utils::_configure_shared_memory({}, {}, {}) },
+		croaks_with(sub { Web::VWF::Utils::_configure_shared_memory({}, {}, {}) },
 			"SharedMem driver requires 'shm_key' parameter", 'shm_key required');
 		my %chi;
-		HTTP::VWF::Utils::_configure_shared_memory(\%chi, { shm_key => 1 }, {});
+		Web::VWF::Utils::_configure_shared_memory(\%chi, { shm_key => 1 }, {});
 		is_deeply(\%chi, { shm_key => 1, shm_size => 16 * 1024, max_size => 1024 }, 'defaults');
 		%chi = ();
-		HTTP::VWF::Utils::_configure_shared_memory(\%chi, { shm_key => 1, shm_size => 2 }, { shm_key => 9, max_size => 3 });
+		Web::VWF::Utils::_configure_shared_memory(\%chi, { shm_key => 1, shm_size => 2 }, { shm_key => 9, max_size => 3 });
 		is_deeply(\%chi, { shm_key => 9, shm_size => 2, max_size => 3 }, 'arguments beat configuration');
 	};
 
 	subtest '_configure_memory' => sub {
 		my %chi;
-		HTTP::VWF::Utils::_configure_memory(\%chi, {});
+		Web::VWF::Utils::_configure_memory(\%chi, {});
 		is_deeply(\%chi, { datastore => {} }, 'private datastore by default');
 		%chi = ();
-		HTTP::VWF::Utils::_configure_memory(\%chi, { global => 0 });
+		Web::VWF::Utils::_configure_memory(\%chi, { global => 0 });
 		is_deeply(\%chi, { global => 0 }, 'global respected even when false');
 	};
 
 	subtest '_configure_memcached' => sub {
 		my $logger = Local::Logger->new();
 		my %chi;
-		HTTP::VWF::Utils::_configure_memcached(\%chi, {}, {}, $logger);
+		Web::VWF::Utils::_configure_memcached(\%chi, {}, {}, $logger);
 		is_deeply($chi{'servers'}, ['127.0.0.1:11211'], 'localhost by default');
 		like($logger->messages('debug')->[0], qr/default Memcached server/, 'default logged');
 		%chi = ();
-		HTTP::VWF::Utils::_configure_memcached(\%chi, { host => 'cache', port => 1 }, {}, undef);
+		Web::VWF::Utils::_configure_memcached(\%chi, { host => 'cache', port => 1 }, {}, undef);
 		is_deeply($chi{'servers'}, ['cache:1'], 'host and port combined');
 	};
 
 	subtest '_configure_file_based' => sub {
 		local $ENV{'root_dir'};
 		my $dir = tempdir(CLEANUP => 1);
-		croaks_with(sub { HTTP::VWF::Utils::_configure_file_based({}, {}, { config => {} }) },
+		croaks_with(sub { Web::VWF::Utils::_configure_file_based({}, {}, { config => {} }) },
 			"File-based cache drivers require 'root_dir' parameter", 'root_dir required');
 		my $nowhere = File::Spec->catdir($dir, 'nowhere');
-		croaks_with(sub { HTTP::VWF::Utils::_configure_file_based({}, { root_dir => $nowhere }, {}) },
+		croaks_with(sub { Web::VWF::Utils::_configure_file_based({}, { root_dir => $nowhere }, {}) },
 			"Root directory '$nowhere' does not exist or is not writable", 'missing directory');
 
 		my %chi;
-		HTTP::VWF::Utils::_configure_file_based(\%chi, { root_dir => $nowhere }, { root_dir => $dir });
+		Web::VWF::Utils::_configure_file_based(\%chi, { root_dir => $nowhere }, { root_dir => $dir });
 		is($chi{'root_dir'}, $dir, 'argument beats configuration');
 		%chi = ();
-		HTTP::VWF::Utils::_configure_file_based(\%chi, {}, { config => { root_dir => $dir } });
+		Web::VWF::Utils::_configure_file_based(\%chi, {}, { config => { root_dir => $dir } });
 		is($chi{'root_dir'}, $dir, 'falls back to the top-level configuration');
 		$ENV{'root_dir'} = $dir;
 		%chi = ();
-		HTTP::VWF::Utils::_configure_file_based(\%chi, { root_dir => $nowhere }, {});
+		Web::VWF::Utils::_configure_file_based(\%chi, { root_dir => $nowhere }, {});
 		is($chi{'root_dir'}, $dir, 'environment beats everything');
 	};
 
 	subtest '_parse_server_config' => sub {
-		is_deeply([HTTP::VWF::Utils::_parse_server_config({}, undef)], [], 'nothing configured');
-		is_deeply([HTTP::VWF::Utils::_parse_server_config({ server => ' a:1 ,b.example-2:65535 ' }, undef)],
+		is_deeply([Web::VWF::Utils::_parse_server_config({}, undef)], [], 'nothing configured');
+		is_deeply([Web::VWF::Utils::_parse_server_config({ server => ' a:1 ,b.example-2:65535 ' }, undef)],
 			['a:1', 'b.example-2:65535'], 'trimmed list');
-		is_deeply([HTTP::VWF::Utils::_parse_server_config({ host => 'a', port => 6379 }, undef)], ['a:6379'], 'default port added');
+		is_deeply([Web::VWF::Utils::_parse_server_config({ host => 'a', port => 6379 }, undef)], ['a:6379'], 'default port added');
 
-		croaks_with(sub { HTTP::VWF::Utils::_parse_server_config({ server => 'a' }, undef) },
+		croaks_with(sub { Web::VWF::Utils::_parse_server_config({ server => 'a' }, undef) },
 			"Port not specified for server 'a'", 'no port anywhere');
-		croaks_with(sub { HTTP::VWF::Utils::_parse_server_config({ server => 'a:0' }, undef) },
+		croaks_with(sub { Web::VWF::Utils::_parse_server_config({ server => 'a:0' }, undef) },
 			'Invalid port number: 0', 'port zero');
-		croaks_with(sub { HTTP::VWF::Utils::_parse_server_config({ server => 'a:65536' }, undef) },
+		croaks_with(sub { Web::VWF::Utils::_parse_server_config({ server => 'a:65536' }, undef) },
 			'Invalid port number: 65536', 'port too high');
 
 		# Anything that could smuggle extra text into a connection string
 		foreach my $bad ('evil host:1', 'a:1;rm -rf /', "a:1\nX-Evil: 1", 'a:b', ':1', 'a:1:2', "a\x{0}:1") {
 			(my $printable = $bad) =~ s/([^\x20-\x7e])/sprintf('\\x{%x}', ord($1))/ge;
-			throws_ok { HTTP::VWF::Utils::_parse_server_config({ server => $bad, port => 1 }, undef) }
+			throws_ok { Web::VWF::Utils::_parse_server_config({ server => $bad, port => 1 }, undef) }
 				qr/\AInvalid server format: /, "rejects '$printable'";
 		}
-		throws_ok { HTTP::VWF::Utils::_parse_server_config({ server => 'a:1,,b:2' }, undef) }
+		throws_ok { Web::VWF::Utils::_parse_server_config({ server => 'a:1,,b:2' }, undef) }
 			qr/\APort not specified for server ''/, 'empty entry in the list is not ignored';
 	};
 
 	subtest 'distance - correct answers' => sub {
-		my $km = HTTP::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}}, 'K');
+		my $km = Web::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}}, 'K');
 		returns_ok($km, { type => 'number', min => 0 }, 'returns a non-negative number');
 		cmp_ok(abs($km - $CONFIG{'london_paris_km'}), '<', $CONFIG{'distance_tolerance'}, "London-Paris is about $CONFIG{london_paris_km} km");
-		my $miles = HTTP::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}});
+		my $miles = Web::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}});
 		cmp_ok($miles, '<', $km, 'miles by default, and fewer of them than km');
-		is(HTTP::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}}, 'k'), $km, 'unit is case-insensitive');
-		is(HTTP::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}}, ''), $miles, 'empty unit means miles');
-		cmp_ok(HTTP::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}}, 'N'), '<', $miles, 'nautical miles');
-		is(HTTP::VWF::Utils::distance(@{$CONFIG{'paris'}}, @{$CONFIG{'london'}}, 'K'), $km, 'symmetric');
-		is(HTTP::VWF::Utils::distance(1, 2, 1, 2), 0, 'identical points');
-		cmp_ok(HTTP::VWF::Utils::distance(90, 0, 90, 180), '<', 1e-6, 'every longitude meets at the pole');
+		is(Web::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}}, 'k'), $km, 'unit is case-insensitive');
+		is(Web::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}}, ''), $miles, 'empty unit means miles');
+		cmp_ok(Web::VWF::Utils::distance(@{$CONFIG{'london'}}, @{$CONFIG{'paris'}}, 'N'), '<', $miles, 'nautical miles');
+		is(Web::VWF::Utils::distance(@{$CONFIG{'paris'}}, @{$CONFIG{'london'}}, 'K'), $km, 'symmetric');
+		is(Web::VWF::Utils::distance(1, 2, 1, 2), 0, 'identical points');
+		cmp_ok(Web::VWF::Utils::distance(90, 0, 90, 180), '<', 1e-6, 'every longitude meets at the pole');
 	};
 
 	subtest 'distance - antipodes never go complex' => sub {
 		# Rounding can push the haversine term over 1; asin() would then
 		# return a Math::Complex object instead of a number
 		foreach my $pair ([0, 0, 0, 180], [45, 10, -45, -170], [33.3, -71.1, -33.3, 108.9], [89.999, 0, -89.999, 180], [12.34, 56.78, -12.34, -123.22]) {
-			my $d = HTTP::VWF::Utils::distance(@{$pair}, 'K');
+			my $d = Web::VWF::Utils::distance(@{$pair}, 'K');
 			ok(!ref($d), "@{$pair}: a plain number");
 			cmp_ok($d, '<=', 3.1416 * 6371 + 1, "@{$pair}: no more than half way round");
 		}
@@ -876,36 +876,36 @@ subtest 'HTTP::VWF::Utils' => sub {
 			my $name = (qw(lat1 lon1 lat2 lon2))[$i];
 			my @bad = @args;
 			$bad[$i] = undef;
-			croaks_with(sub { HTTP::VWF::Utils::distance(@bad) }, "$name must be defined", "$name undef");
+			croaks_with(sub { Web::VWF::Utils::distance(@bad) }, "$name must be defined", "$name undef");
 			foreach my $junk ('abc', '', '1; system("id")', 'NaN', '-nan', [1], { 1 => 1 }) {
 				@bad = @args;
 				$bad[$i] = $junk;
-				croaks_with(sub { HTTP::VWF::Utils::distance(@bad) }, "$name must be numeric", "$name '" . (ref($junk) || $junk) . "'");
+				croaks_with(sub { Web::VWF::Utils::distance(@bad) }, "$name must be numeric", "$name '" . (ref($junk) || $junk) . "'");
 			}
 		}
-		croaks_with(sub { HTTP::VWF::Utils::distance(90.0001, 0, 0, 0) }, 'Latitude must be between -90 and 90 degrees', 'latitude too high');
-		croaks_with(sub { HTTP::VWF::Utils::distance(0, 0, -91, 0) }, 'Latitude must be between -90 and 90 degrees', 'latitude too low');
-		croaks_with(sub { HTTP::VWF::Utils::distance(0, 180.5, 0, 0) }, 'Longitude must be between -180 and 180 degrees', 'longitude too high');
-		croaks_with(sub { HTTP::VWF::Utils::distance('Inf', 0, 0, 0) }, 'Latitude must be between -90 and 90 degrees', 'infinity');
-		croaks_with(sub { HTTP::VWF::Utils::distance(1, 2, 3, 4, 'X') }, "Unknown unit 'X'. Use 'K', 'N', or 'M'", 'unknown unit');
-		croaks_with(sub { HTTP::VWF::Utils::distance(1, 2, 3, 4, 'KM') }, "Unknown unit 'KM'. Use 'K', 'N', or 'M'", 'unit must be one letter');
-		croaks_with(sub { HTTP::VWF::Utils::distance(1, 2, 3, 4, "K\n") }, "Unknown unit 'K\n'. Use 'K', 'N', or 'M'", 'unit with a newline');
+		croaks_with(sub { Web::VWF::Utils::distance(90.0001, 0, 0, 0) }, 'Latitude must be between -90 and 90 degrees', 'latitude too high');
+		croaks_with(sub { Web::VWF::Utils::distance(0, 0, -91, 0) }, 'Latitude must be between -90 and 90 degrees', 'latitude too low');
+		croaks_with(sub { Web::VWF::Utils::distance(0, 180.5, 0, 0) }, 'Longitude must be between -180 and 180 degrees', 'longitude too high');
+		croaks_with(sub { Web::VWF::Utils::distance('Inf', 0, 0, 0) }, 'Latitude must be between -90 and 90 degrees', 'infinity');
+		croaks_with(sub { Web::VWF::Utils::distance(1, 2, 3, 4, 'X') }, "Unknown unit 'X'. Use 'K', 'N', or 'M'", 'unknown unit');
+		croaks_with(sub { Web::VWF::Utils::distance(1, 2, 3, 4, 'KM') }, "Unknown unit 'KM'. Use 'K', 'N', or 'M'", 'unit must be one letter');
+		croaks_with(sub { Web::VWF::Utils::distance(1, 2, 3, 4, "K\n") }, "Unknown unit 'K\n'. Use 'K', 'N', or 'M'", 'unit with a newline');
 
 		# A bad unit is a bad call, even when the answer would be zero anyway
-		croaks_with(sub { HTTP::VWF::Utils::distance(1, 2, 1, 2, 'X') }, "Unknown unit 'X'. Use 'K', 'N', or 'M'", 'bad unit on identical points');
+		croaks_with(sub { Web::VWF::Utils::distance(1, 2, 1, 2, 'X') }, "Unknown unit 'X'. Use 'K', 'N', or 'M'", 'bad unit on identical points');
 	};
 
 	subtest 'helpers leave $_ alone' => sub {
 		local $_ = 'sentinel';
-		HTTP::VWF::Utils::_parse_server_config({ server => 'a:1,b:2' }, undef);
-		HTTP::VWF::Utils::_validate_cache_config({ c => { driver => 'Memory', port => 1 } }, 'c');
-		HTTP::VWF::Utils::distance(1, 2, 3, 4);
+		Web::VWF::Utils::_parse_server_config({ server => 'a:1,b:2' }, undef);
+		Web::VWF::Utils::_validate_cache_config({ c => { driver => 'Memory', port => 1 } }, 'c');
+		Web::VWF::Utils::distance(1, 2, 3, 4);
 		is($_, 'sentinel', '$_ unchanged');
 	};
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Config' => sub {
+subtest 'Web::VWF::Config' => sub {
 	fresh();
 	my $dir = tempdir(CLEANUP => 1);
 	my $script_dir = File::Spec->catdir($dir, 'site', 'cgi-bin');
@@ -921,8 +921,8 @@ subtest 'HTTP::VWF::Config' => sub {
 		mock_config_abstraction({ SiteTitle => ['My', 'Site'], Contents => 'c', colour => 'red', size => 'small', nested => 'x' });
 		local $ENV{'colour'} = 'blue';
 		local $ENV{'nested'} = 'key=value';
-		my $config = HTTP::VWF::Config->new(info => $info->(), config => { size => 'large' });
-		returns_ok($config, { type => 'object', isa => 'HTTP::VWF::Config' }, 'returns a config object');
+		my $config = Web::VWF::Config->new(info => $info->(), config => { size => 'large' });
+		returns_ok($config, { type => 'object', isa => 'Web::VWF::Config' }, 'returns a config object');
 		is($config->{'SiteTitle'}, 'My Site', 'array fields put back together');
 		is($config->{'size'}, 'large', 'caller beats file');
 		is($config->{'colour'}, 'blue', 'environment beats file');
@@ -934,7 +934,7 @@ subtest 'HTTP::VWF::Config' => sub {
 
 	subtest 'new - search path' => sub {
 		mock_config_abstraction({});
-		HTTP::VWF::Config->new(info => $info->());
+		Web::VWF::Config->new(info => $info->());
 		my $dirs = $Local::ConfigAbstraction::NEW_ARGS[0]{'config_dirs'};
 		is($dirs->[0], File::Spec->catdir($script_dir, File::Spec->updir(), File::Spec->updir(), 'conf'), 'script-relative first');
 		ok((grep { $_ eq File::Spec->catdir($dir, 'lib', 'conf') } @{$dirs}), '$HOME/lib/conf searched');
@@ -942,19 +942,19 @@ subtest 'HTTP::VWF::Config' => sub {
 		is_deeply($Local::ConfigAbstraction::NEW_ARGS[0]{'config_files'}, ['default', $CONFIG{'domain'}, undef, undef], 'default then the site');
 
 		@Local::ConfigAbstraction::NEW_ARGS = ();
-		HTTP::VWF::Config->new(info => $info->(), lingua => Local::Lingua->new(language => 'fr'));
+		Web::VWF::Config->new(info => $info->(), lingua => Local::Lingua->new(language => 'fr'));
 		$dirs = $Local::ConfigAbstraction::NEW_ARGS[0]{'config_dirs'};
 		ok((grep { m{/fr\z} } @{$dirs}), 'localised directory added for the language');
 
 		@Local::ConfigAbstraction::NEW_ARGS = ();
-		HTTP::VWF::Config->new(info => $info->(), config_directory => $dir);
+		Web::VWF::Config->new(info => $info->(), config_directory => $dir);
 		is($Local::ConfigAbstraction::NEW_ARGS[0]{'config_dirs'}[0], $dir, 'caller directory comes first');
 		restore_all();
 	};
 
 	subtest 'new - server directory per site' => sub {
 		mock_config_abstraction({});
-		HTTP::VWF::Config->new(info => $info->(), directory => $CONFIG{'default_vwf_directory'});
+		Web::VWF::Config->new(info => $info->(), directory => $CONFIG{'default_vwf_directory'});
 		my $dirs = $Local::ConfigAbstraction::NEW_ARGS[0]{'config_dirs'};
 		my $site = File::Spec->catdir($CONFIG{'default_vwf_directory'}, $CONFIG{'domain'});
 		ok((grep { $_ eq $site } @{$dirs}), 'directory/site searched');
@@ -963,41 +963,41 @@ subtest 'HTTP::VWF::Config' => sub {
 		# walk out of the server's directory
 		foreach my $hostile ('../../etc', '..', 'a/../../b', 'example.com/../../etc', "example.com\n", '', 'exa mple.com') {
 			@Local::ConfigAbstraction::NEW_ARGS = ();
-			HTTP::VWF::Config->new(info => $info->(domain_name => $hostile), directory => $CONFIG{'default_vwf_directory'});
+			Web::VWF::Config->new(info => $info->(domain_name => $hostile), directory => $CONFIG{'default_vwf_directory'});
 			$dirs = $Local::ConfigAbstraction::NEW_ARGS[0]{'config_dirs'};
 			(my $printable = $hostile) =~ s/\n/\\n/g;
 			ok(!(grep { index($_, $CONFIG{'default_vwf_directory'}) == 0 } @{$dirs}), "hostile site name '$printable' not used");
 		}
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->(), directory => [$dir]) }, 'directory must be a string', 'directory ref refused');
+		error_text_is(sub { Web::VWF::Config->new(info => $info->(), directory => [$dir]) }, 'directory must be a string', 'directory ref refused');
 		restore_all();
 	};
 
 	subtest 'new - CONFIG_DIR' => sub {
 		mock_config_abstraction({});
 		local $ENV{'CONFIG_DIR'} = $dir;
-		HTTP::VWF::Config->new(info => $info->());
+		Web::VWF::Config->new(info => $info->());
 		is($Local::ConfigAbstraction::NEW_ARGS[0]{'config_dirs'}[0], $dir, 'CONFIG_DIR used');
 		ok(!(grep { m{/lib/conf} } @{$Local::ConfigAbstraction::NEW_ARGS[0]{'config_dirs'}}), 'and nothing else');
 		$ENV{'CONFIG_DIR'} = File::Spec->catdir($dir, 'missing');
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->()) },
+		error_text_is(sub { Web::VWF::Config->new(info => $info->()) },
 			"CONFIG_DIR '$ENV{CONFIG_DIR}' does not exist or is not readable", 'missing CONFIG_DIR');
 		restore_all();
 	};
 
 	subtest 'new - hostile arguments' => sub {
 		mock_config_abstraction({});
-		error_text_is(sub { HTTP::VWF::Config->new(logger => 'not an object') },
+		error_text_is(sub { Web::VWF::Config->new(logger => 'not an object') },
 			'logger must be an object with debug method', 'string logger');
-		error_text_is(sub { HTTP::VWF::Config->new(logger => bless({}, 'Local::Nothing')) },
+		error_text_is(sub { Web::VWF::Config->new(logger => bless({}, 'Local::Nothing')) },
 			'logger must be an object with debug method', 'logger without debug()');
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->(), config => [1]) },
+		error_text_is(sub { Web::VWF::Config->new(info => $info->(), config => [1]) },
 			'config must be a hash reference', 'config arrayref');
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->(), config => 'x=y') },
+		error_text_is(sub { Web::VWF::Config->new(info => $info->(), config => 'x=y') },
 			'config must be a hash reference', 'config string');
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->(), config_directory => { a => 1 }) },
+		error_text_is(sub { Web::VWF::Config->new(info => $info->(), config_directory => { a => 1 }) },
 			'config_directory must be a string', 'config_directory ref');
 		my $missing = File::Spec->catdir($dir, 'missing');
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->(), config_directory => $missing) },
+		error_text_is(sub { Web::VWF::Config->new(info => $info->(), config_directory => $missing) },
 			"config_directory '$missing' does not exist", 'config_directory missing');
 		restore_all();
 	};
@@ -1005,16 +1005,16 @@ subtest 'HTTP::VWF::Config' => sub {
 	subtest 'new - configuration reader failures' => sub {
 		# Whatever goes wrong while reading must come out as one clear error
 		mock 'Config::Abstraction::new' => sub { die "parse error at line 3\n" };
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->()) },
+		error_text_is(sub { Web::VWF::Config->new(info => $info->()) },
 			"Configuration error: parse error at line 3\n", 'reader dies');
 		restore_all();
 
 		mock_config_abstraction(undef);
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->()) }, 'Configuration error: ', 'reader returns nothing');
+		error_text_is(sub { Web::VWF::Config->new(info => $info->()) }, 'Configuration error: ', 'reader returns nothing');
 		restore_all();
 
 		mock_config_abstraction([1, 2]);
-		error_text_is(sub { HTTP::VWF::Config->new(info => $info->()) }, 'Configuration must be a hash reference', 'reader returns a list');
+		error_text_is(sub { Web::VWF::Config->new(info => $info->()) }, 'Configuration must be a hash reference', 'reader returns a list');
 		restore_all();
 	};
 
@@ -1022,92 +1022,92 @@ subtest 'HTTP::VWF::Config' => sub {
 		mock_config_abstraction({ a => 1 });
 		my $logger = Local::Logger->new();
 		local $ENV{'VWF_FUNCTION_TEST'} = 'present';
-		HTTP::VWF::Config->new(info => $info->(), logger => $logger, debug => 1);
+		Web::VWF::Config->new(info => $info->(), logger => $logger, debug => 1);
 		ok((grep { $_ eq 'VWF_FUNCTION_TEST=present' } @{$logger->messages('debug')}), 'environment dumped');
-		lives_ok { HTTP::VWF::Config->new(info => $info->(), debug => 1) } 'debug without a logger';
+		lives_ok { Web::VWF::Config->new(info => $info->(), debug => 1) } 'debug without a logger';
 		restore_all();
 	};
 
 	subtest 'AUTOLOAD' => sub {
-		my $config = bless { site => 'x', empty => '' }, 'HTTP::VWF::Config';
+		my $config = bless { site => 'x', empty => '' }, 'Web::VWF::Config';
 		is($config->site(), 'x', 'existing key');
 		is($config->empty(), '', 'false value returned as is');
 		is($config->missing(), undef, 'missing key is undef');
 		ok(!exists($config->{'missing'}), 'and is not created');
 
 		# Called on the class there is no hash, and strict refs must not die
-		is(HTTP::VWF::Config->site(), undef, 'class method returns undef');
+		is(Web::VWF::Config->site(), undef, 'class method returns undef');
 
 		my $bad = 'bad-name';
-		croaks_with(sub { $config->$bad() }, 'HTTP::VWF::Config: Invalid key name: bad-name', 'punctuation in a key');
+		croaks_with(sub { $config->$bad() }, 'Web::VWF::Config: Invalid key name: bad-name', 'punctuation in a key');
 		$bad = '1abc';
-		croaks_with(sub { $config->$bad() }, 'HTTP::VWF::Config: Invalid key name: 1abc', 'key starting with a digit');
+		croaks_with(sub { $config->$bad() }, 'Web::VWF::Config: Invalid key name: 1abc', 'key starting with a digit');
 		lives_ok { $config->DESTROY() } 'DESTROY is not a key';
 	};
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF' => sub {
+subtest 'Web::VWF' => sub {
 	fresh();
 
 	subtest 'new' => sub {
-		my $vwf = HTTP::VWF->new(directory => '/etc/vwf', logger => 'l');
-		returns_ok($vwf, { type => 'object', isa => 'HTTP::VWF' }, 'object');
+		my $vwf = Web::VWF->new(directory => '/etc/vwf', logger => 'l');
+		returns_ok($vwf, { type => 'object', isa => 'Web::VWF' }, 'object');
 		is($vwf->{'directory'}, '/etc/vwf', 'directory kept');
-		is(HTTP::VWF->new({ directory => '/srv' })->{'directory'}, '/srv', 'hashref style');
-		isa_ok($vwf->new(), 'HTTP::VWF', 'new() on an object');
+		is(Web::VWF->new({ directory => '/srv' })->{'directory'}, '/srv', 'hashref style');
+		isa_ok($vwf->new(), 'Web::VWF', 'new() on an object');
 		memory_cycle_ok($vwf, 'no cycles');
 
-		croaks_with(sub { HTTP::VWF->new(directory => ['/etc']) }, 'directory must be a string', 'arrayref directory');
-		croaks_with(sub { HTTP::VWF->new(directory => \'/etc') }, 'directory must be a string', 'scalar ref directory');
+		croaks_with(sub { Web::VWF->new(directory => ['/etc']) }, 'directory must be a string', 'arrayref directory');
+		croaks_with(sub { Web::VWF->new(directory => \'/etc') }, 'directory must be a string', 'scalar ref directory');
 	};
 
 	subtest 'directory' => sub {
-		is(HTTP::VWF->new(directory => '/etc/vwf')->directory(), '/etc/vwf', 'given directory');
-		is(HTTP::VWF->new()->directory(), $CONFIG{'default_vwf_directory'}, 'documented default');
-		is(HTTP::VWF->new(directory => undef)->directory(), $CONFIG{'default_vwf_directory'}, 'undef means the default');
+		is(Web::VWF->new(directory => '/etc/vwf')->_directory(), '/etc/vwf', 'given directory');
+		is(Web::VWF->new()->_directory(), $CONFIG{'default_vwf_directory'}, 'documented default');
+		is(Web::VWF->new(directory => undef)->_directory(), $CONFIG{'default_vwf_directory'}, 'undef means the default');
 	};
 
 	subtest 'config' => sub {
 		# Read once, with the server directory and the caller's own arguments
 		my @calls;
-		mock 'HTTP::VWF::Config::new' => sub { push @calls, $_[1]; return bless({}, 'HTTP::VWF::Config') };
-		my $vwf = HTTP::VWF->new(config_file => 'site.xml');
-		my $config = $vwf->config();
-		isa_ok($config, 'HTTP::VWF::Config');
-		is($vwf->config(), $config, 'kept, not re-read');
+		mock 'Web::VWF::Config::new' => sub { push @calls, $_[1]; return bless({}, 'Web::VWF::Config') };
+		my $vwf = Web::VWF->new(config_file => 'site.xml');
+		my $config = $vwf->_config();
+		isa_ok($config, 'Web::VWF::Config');
+		is($vwf->_config(), $config, 'kept, not re-read');
 		is(scalar(@calls), 1, 'configuration read once');
 		is_deeply($calls[0], { config_file => 'site.xml', directory => $CONFIG{'default_vwf_directory'} }, 'arguments passed on');
 		restore_all();
 
 		# A failed read must not be remembered as a configuration
-		mock 'HTTP::VWF::Config::new' => sub { die "unreadable\n" };
-		throws_ok { $vwf->new()->config() } qr/\Aunreadable/, 'error propagates';
+		mock 'Web::VWF::Config::new' => sub { die "unreadable\n" };
+		throws_ok { $vwf->new()->_config() } qr/\Aunreadable/, 'error propagates';
 		restore_all();
 	};
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::CAPTCHA' => sub {
+subtest 'Web::VWF::CAPTCHA' => sub {
 	fresh();
 	my $json_reply = sub { HTTP::Response->new(200, 'OK', ['Content-Type' => 'application/json'], shift) };
 
 	subtest 'new / get_site_key' => sub {
-		my $c = HTTP::VWF::CAPTCHA->new(site_key => 'site', secret_key => 'secret');
-		returns_ok($c, { type => 'object', isa => 'HTTP::VWF::CAPTCHA' }, 'object');
+		my $c = Web::VWF::CAPTCHA->new(site_key => 'site', secret_key => 'secret');
+		returns_ok($c, { type => 'object', isa => 'Web::VWF::CAPTCHA' }, 'object');
 		is($c->get_site_key(), 'site', 'site key');
 		memory_cycle_ok($c, 'no cycles');
 
-		throws_ok { HTTP::VWF::CAPTCHA->new(secret_key => 'secret') } qr/\Asite_key required/, 'site_key required';
-		throws_ok { HTTP::VWF::CAPTCHA->new(site_key => 'site') } qr/\Asecret_key required/, 'secret_key required';
-		throws_ok { HTTP::VWF::CAPTCHA->new(site_key => '', secret_key => 'x') } qr/\Asite_key required/, 'empty site_key';
+		throws_ok { Web::VWF::CAPTCHA->new(secret_key => 'secret') } qr/\Asite_key required/, 'site_key required';
+		throws_ok { Web::VWF::CAPTCHA->new(site_key => 'site') } qr/\Asecret_key required/, 'secret_key required';
+		throws_ok { Web::VWF::CAPTCHA->new(site_key => '', secret_key => 'x') } qr/\Asite_key required/, 'empty site_key';
 	};
 
 	subtest 'verify - success' => sub {
 		my $logger = Local::Logger->new();
 		my @posts;
 		mock 'LWP::UserAgent::post' => sub { push @posts, [@_[1, 2]]; return $json_reply->(encode_json({ success => \1 })) };
-		my $c = HTTP::VWF::CAPTCHA->new(site_key => 's', secret_key => 'k', logger => $logger);
+		my $c = Web::VWF::CAPTCHA->new(site_key => 's', secret_key => 'k', logger => $logger);
 		is($c->verify('token', $CONFIG{'client_ip'}), 1, 'verified');
 		is($posts[0][0], 'https://www.google.com/recaptcha/api/siteverify', 'Google endpoint');
 		is_deeply($posts[0][1], { secret => 'k', response => 'token', remoteip => $CONFIG{'client_ip'} }, 'form sent');
@@ -1117,7 +1117,7 @@ subtest 'HTTP::VWF::CAPTCHA' => sub {
 
 	subtest 'verify - every failure is 0, never an exception' => sub {
 		my $logger = Local::Logger->new();
-		my $c = HTTP::VWF::CAPTCHA->new(site_key => 's', secret_key => 'k', logger => $logger);
+		my $c = Web::VWF::CAPTCHA->new(site_key => 's', secret_key => 'k', logger => $logger);
 
 		# No token: no network traffic at all
 		mock 'LWP::UserAgent::post' => sub { die 'must not be called' };
@@ -1152,20 +1152,20 @@ subtest 'HTTP::VWF::CAPTCHA' => sub {
 
 	subtest 'verify - no address, no warnings' => sub {
 		mock 'LWP::UserAgent::post' => sub { return $json_reply->('{"success":false}') };
-		my $c = HTTP::VWF::CAPTCHA->new(site_key => 's', secret_key => 'k', logger => Local::Logger->new());
+		my $c = Web::VWF::CAPTCHA->new(site_key => 's', secret_key => 'k', logger => Local::Logger->new());
 		warnings_are { $c->verify('t', undef) } [], 'undef address does not warn';
-		my $quiet = HTTP::VWF::CAPTCHA->new(site_key => 's', secret_key => 'k');
+		my $quiet = Web::VWF::CAPTCHA->new(site_key => 's', secret_key => 'k');
 		warnings_are { $quiet->verify('t', undef) } [], 'and nor does no logger';
 		restore_all();
 	};
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Data::index / vwf_log' => sub {
+subtest 'Web::VWF::Data::index / vwf_log' => sub {
 	fresh();
 
 	subtest 'index' => sub {
-		ok(HTTP::VWF::Data::index->isa('Database::Abstraction'), 'is a Database::Abstraction');
+		ok(Web::VWF::Data::index->isa('Database::Abstraction'), 'is a Database::Abstraction');
 	};
 
 	subtest 'vwf_log::_open' => sub {
@@ -1173,7 +1173,7 @@ subtest 'HTTP::VWF::Data::index / vwf_log' => sub {
 		# supplied, whichever calling style is used
 		my @calls;
 		mock 'Database::Abstraction::_open' => sub { my $self = shift; push @calls, {@_}; return $self };
-		my $db = bless {}, 'HTTP::VWF::Data::vwf_log';
+		my $db = bless {}, 'Web::VWF::Data::vwf_log';
 		$db->_open();
 		$db->_open({ table => 't' });
 		$db->_open(sep_char => ';');
@@ -1187,7 +1187,7 @@ subtest 'HTTP::VWF::Data::index / vwf_log' => sub {
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Allow' => sub {
+subtest 'Web::VWF::Allow' => sub {
 	fresh();
 	my $dir = tempdir(CLEANUP => 1);
 	my $today = DateTime->today()->ymd();
@@ -1212,7 +1212,7 @@ subtest 'HTTP::VWF::Allow' => sub {
 
 	subtest 'not a CGI request' => sub {
 		local $ENV{'REMOTE_ADDR'};
-		is(HTTP::VWF::Allow::allow(), 1, 'no REMOTE_ADDR: allowed');
+		is(Web::VWF::Allow::allow(), 1, 'no REMOTE_ADDR: allowed');
 	};
 
 	subtest 'clean client is allowed, and the answer cached' => sub {
@@ -1220,12 +1220,12 @@ subtest 'HTTP::VWF::Allow' => sub {
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		my $logger = Local::Logger->new();
 		my $info = Local::Info->new(tmpdir => $dir);
-		is(HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->(), logger => $logger), 1, 'allowed');
+		is(Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->(), logger => $logger), 1, 'allowed');
 		like($logger->messages('trace')->[-1], qr/\AAllowing connexion from /, 'logged');
 
 		# The second call must not run the checks again
 		mock 'Data::Throttler::new' => sub { die 'checks must not run again' };
-		is(HTTP::VWF::Allow::allow({ info => $info, cache => $quiet_cache->(), logger => $logger }), 1, 'cached answer');
+		is(Web::VWF::Allow::allow({ info => $info, cache => $quiet_cache->(), logger => $logger }), 1, 'cached answer');
 		like($logger->messages('debug')->[-1], qr/cached value 1\z/, 'cache hit logged');
 		restore_all();
 	};
@@ -1235,14 +1235,14 @@ subtest 'HTTP::VWF::Allow' => sub {
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		my $info = Local::Info->new(tmpdir => $dir);
 		$FAKE_TIME = CORE::time();
-		HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->());
+		Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->());
 		my $runs = 0;
 		mock 'Data::Throttler::new' => sub { $runs++; return Local::Throttler->new(1) };
 		$FAKE_TIME += $CONFIG{'status_ttl'} - 1;
-		HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->());
+		Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->());
 		is($runs, 0, 'still cached just before expiry');
 		$FAKE_TIME += 2;
-		HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->());
+		Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->());
 		is($runs, 1, 'checked again after expiry');
 		$FAKE_TIME = undef;
 		restore_all();
@@ -1252,24 +1252,24 @@ subtest 'HTTP::VWF::Allow' => sub {
 		$setup->();
 		local $ENV{'REMOTE_ADDR'} = my $ip = $next_ip->();
 		local $ENV{'HTTP_USER_AGENT'} = 'masscan';
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()) },
 			"$ip: Masscan is blacklisted", 'masscan refused');
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir)), 0, 'refusal remembered');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir)), 0, 'refusal remembered');
 
 		# Only an exact match counts: a substring must not block a browser
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		local $ENV{'HTTP_USER_AGENT'} = 'Mozilla/5.0 (masscan-lookalike)';
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()), 1, 'lookalike allowed');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()), 1, 'lookalike allowed');
 		restore_all();
 	};
 
 	subtest 'no info' => sub {
 		$setup->();
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
-		warning_like { is(HTTP::VWF::Allow::allow(), 1, 'allowed without info') } qr/\AInfo not given/, 'carps';
+		warning_like { is(Web::VWF::Allow::allow(), 1, 'allowed without info') } qr/\AInfo not given/, 'carps';
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		my $logger = Local::Logger->new();
-		warnings_are { HTTP::VWF::Allow::allow(logger => $logger) } [], 'logger instead of a warning';
+		warnings_are { Web::VWF::Allow::allow(logger => $logger) } [], 'logger instead of a warning';
 		is_deeply($logger->messages('warn'), ['Info not given'], 'logged');
 		restore_all();
 	};
@@ -1278,7 +1278,7 @@ subtest 'HTTP::VWF::Allow' => sub {
 		$setup->(throttle => 0);
 		local $ENV{'REMOTE_ADDR'} = my $ip = $next_ip->();
 		my $info = Local::Info->new(tmpdir => $dir);
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->()) }, "$ip has been throttled", 'throttled');
+		error_text_is(sub { Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->()) }, "$ip has been throttled", 'throttled');
 		is_deeply($info->{'status_calls'}, [429], '429 Too Many Requests');
 		restore_all();
 
@@ -1287,13 +1287,13 @@ subtest 'HTTP::VWF::Allow' => sub {
 		mock_ids();
 		mock 'Data::Throttler::new' => sub { shift; %args = @_; return Local::Throttler->new(1) };
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
-		HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->(), config => { throttle => { max_items => 5, interval => 7, file => '/x' } });
+		Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->(), config => { throttle => { max_items => 5, interval => 7, file => '/x' } });
 		is_deeply([@args{qw(max_items interval)}, $args{'backend_options'}{'db_file'}], [5, 7, '/x'], 'limits from configuration');
 
 		# Search engines are not throttled at all
 		mock 'Data::Throttler::new' => sub { die 'search engines must not be throttled' };
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(is_search_engine => 1), cache => $quiet_cache->()), 1, 'search engine skipped');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(is_search_engine => 1), cache => $quiet_cache->()), 1, 'search engine skipped');
 		restore_all();
 	};
 
@@ -1306,7 +1306,7 @@ subtest 'HTTP::VWF::Allow' => sub {
 		mock 'Data::Throttler::new' => sub { die "YAML Error: bad indentation\n" };
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		my $logger = Local::Logger->new();
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->(), logger => $logger), 1, 'served');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->(), logger => $logger), 1, 'served');
 		ok(!-e $store, 'corrupt store removed');
 		like($logger->messages('info')->[0], qr/\Aremoving corrupt throttle DB /, 'removal logged');
 		restore_all();
@@ -1316,16 +1316,16 @@ subtest 'HTTP::VWF::Allow' => sub {
 		$setup->();
 		local $ENV{'REMOTE_ADDR'} = my $ip = $next_ip->();
 		my $info = Local::Info->new(tmpdir => $dir);
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->(), lingua => Local::Lingua->new(country => $CONFIG{'blocked_country'})) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->(), lingua => Local::Lingua->new(country => $CONFIG{'blocked_country'})) },
 			"$ip: blocked connexion from $CONFIG{blocked_country}", 'blocked country refused');
 		is_deeply($info->{'status_calls'}, [403], '403 Forbidden');
 
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->(),
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->(),
 			lingua => Local::Lingua->new(country => $CONFIG{'blocked_country'}), config => { blacklist_countries => 'RU' }), 1, 'site list replaces the default');
 
 		local $ENV{'REMOTE_ADDR'} = $CONFIG{'private_ip'};
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->(),
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->(),
 			lingua => Local::Lingua->new(country => $CONFIG{'blocked_country'})), 1, 'local network never blocked by country');
 		restore_all();
 	};
@@ -1336,7 +1336,7 @@ subtest 'HTTP::VWF::Allow' => sub {
 		local $ENV{'REMOTE_ADDR'} = my $ip = $next_ip->();
 		$Local::IDS::IMPACT = $CONFIG{'ids_block_impact'};
 		my $info = Local::Info->new(tmpdir => $dir, params => { q => '<script>' });
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->()) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->()) },
 			"$ip: IDS blocked connexion for page=index", 'high impact refused');
 		is_deeply($info->{'status_calls'}, [403], '403 Forbidden');
 
@@ -1344,21 +1344,21 @@ subtest 'HTTP::VWF::Allow' => sub {
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		$Local::IDS::IMPACT = $CONFIG{'ids_warn_impact'};
 		my $logger = Local::Logger->new();
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir, params => { q => 'x', fbclid => 'f' }), cache => $quiet_cache->(), logger => $logger), 1, 'low impact served');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir, params => { q => 'x', fbclid => 'f' }), cache => $quiet_cache->(), logger => $logger), 1, 'low impact served');
 		like($logger->messages('warn')->[0], qr/impact = $CONFIG{ids_warn_impact}\z/, 'and logged');
 
 		# /etc/passwd is refused whatever the IDS thinks of it
 		$Local::IDS::IMPACT = 0;
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		$info = Local::Info->new(tmpdir => $dir, params => { file => '/etc/passwd' });
-		is(HTTP::VWF::Allow::allow(info => $info, cache => $quiet_cache->()), 0, '/etc/passwd refused');
+		is(Web::VWF::Allow::allow(info => $info, cache => $quiet_cache->()), 0, '/etc/passwd refused');
 		is_deeply($info->{'status_calls'}, [403], '403 Forbidden');
 
 		# POSTs are not scanned here
 		local $ENV{'REQUEST_METHOD'} = 'POST';
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		$Local::IDS::IMPACT = 1000;
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir, params => { q => 'x' }), cache => $quiet_cache->()), 1, 'POST not scanned');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir, params => { q => 'x' }), cache => $quiet_cache->()), 1, 'POST not scanned');
 		restore_all();
 	};
 
@@ -1366,18 +1366,18 @@ subtest 'HTTP::VWF::Allow' => sub {
 		$setup->();
 		local $ENV{'REMOTE_ADDR'} = my $ip = $next_ip->();
 		local $ENV{'HTTP_REFERER'} = 'http://www.tcsindustry.com/page';
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()) },
 			"$ip: Blocked trawler", 'known trawler');
 
 		local $ENV{'REMOTE_ADDR'} = $ip = $next_ip->();
 		local $ENV{'HTTP_REFERER'} = '() { :;}; /bin/bash -c "id"';
 		(my $plussed = $ENV{'HTTP_REFERER'}) =~ tr/ /+/;
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()) },
 			"$ip: Blocked shellshocker for $plussed", 'shellshock referer');
 
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		local $ENV{'HTTP_REFERER'} = 'https://www.example.com/search?q=a b';
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()), 1, 'ordinary referer allowed');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()), 1, 'ordinary referer allowed');
 		restore_all();
 	};
 
@@ -1386,19 +1386,19 @@ subtest 'HTTP::VWF::Allow' => sub {
 		foreach my $script ('/shell.php', '/cmd.php') {
 			local $ENV{'REMOTE_ADDR'} = my $ip = $next_ip->();
 			local $ENV{'SCRIPT_URI'} = "https://example.com$script";
-			error_text_is(sub { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()) },
+			error_text_is(sub { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()) },
 				"$ip: Blocked attacker for $ip", "$script refused");
 		}
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		local $ENV{'SCRIPT_URI'} = 'https://example.com/shell.php.html';
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()), 1, 'only the exact ending');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->()), 1, 'only the exact ending');
 		restore_all();
 	};
 
 	subtest 'DShield list' => sub {
 		$setup->();
 		local $ENV{'REMOTE_ADDR'} = my $ip = $next_ip->();
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => Local::Cache->new($today => "$CONFIG{other_ip},$ip")) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => Local::Cache->new($today => "$CONFIG{other_ip},$ip")) },
 			"Dshield blocked connexion from $ip", 'listed address refused');
 
 		# An empty cached list is deleted so that it is fetched again
@@ -1408,7 +1408,7 @@ subtest 'HTTP::VWF::Allow' => sub {
 		mock 'LWP::Simple::WithCache::get' => sub { return };
 		my $cache = Local::Cache->new($today => ',');
 		my $logger = Local::Logger->new();
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $cache, logger => $logger), 1, 'served');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $cache, logger => $logger), 1, 'served');
 		is_deeply($cache->{'removed'}, [$today], 'empty list removed');
 		like($logger->messages('warn')->[-1], qr/\ACouldn't download /, 'failed download logged');
 		restore_all();
@@ -1421,7 +1421,7 @@ subtest 'HTTP::VWF::Allow' => sub {
 			. "<data><ip>198.051.100.009</ip><lastseen>$today</lastseen></data></sources>";
 		mock 'LWP::Simple::WithCache::get' => sub { return $xml };
 		my $cache = Local::Cache->new();
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $cache) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $cache) },
 			'Dshield blocked connexion from 10.0.0.1', 'leading zeros are not octal');
 		is_deeply($cache->{'sets'}, [[$today, '10.0.0.1,198.51.100.9', $CONFIG{'dshield_duration'}]], 'list cached for a day');
 		restore_all();
@@ -1431,7 +1431,7 @@ subtest 'HTTP::VWF::Allow' => sub {
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		mock 'LWP::Simple::WithCache::get' => sub { return '<sources><data>' };
 		$cache = Local::Cache->new();
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $cache), 1, 'malformed XML ignored');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $cache), 1, 'malformed XML ignored');
 		is_deeply($cache->{'sets'}, [], 'nothing cached');
 		restore_all();
 
@@ -1439,7 +1439,7 @@ subtest 'HTTP::VWF::Allow' => sub {
 		$setup->(fetch => 1);
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		mock 'LWP::Simple::WithCache::get' => sub { return };
-		warning_like { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => Local::Cache->new()) }
+		warning_like { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => Local::Cache->new()) }
 			qr/\ACouldn't download https:\/\/secure\.dshield\.org\//, 'warns without a logger';
 		restore_all();
 	};
@@ -1447,21 +1447,21 @@ subtest 'HTTP::VWF::Allow' => sub {
 	subtest 'cache comes from configuration' => sub {
 		$setup->();
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir)) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir)) },
 			'Either cache or config must be given', 'neither cache nor config');
 
 		my %args;
-		mock 'HTTP::VWF::Utils::create_memory_cache' => sub { %args = @_; return $quiet_cache->() };
+		mock 'Web::VWF::Utils::create_memory_cache' => sub { %args = @_; return $quiet_cache->() };
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
-		is(HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), config => { a => 1 }), 1, 'served');
-		is($args{'namespace'}, 'HTTP::VWF::Allow', 'cache built in our namespace');
+		is(Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), config => { a => 1 }), 1, 'served');
+		is($args{'namespace'}, 'Web::VWF::Allow', 'cache built in our namespace');
 		restore_all();
 	};
 
 	subtest 'tracking cookie' => sub {
 		$setup->();
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
-		error_text_is(sub { HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir, cookies => { mycustomtrackid => 'x' }), cache => $quiet_cache->()) },
+		error_text_is(sub { Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir, cookies => { mycustomtrackid => 'x' }), cache => $quiet_cache->()) },
 			'Blocking possible jqic', 'jqic cookie refused');
 		restore_all();
 	};
@@ -1470,21 +1470,21 @@ subtest 'HTTP::VWF::Allow' => sub {
 		$setup->();
 		local $ENV{'REMOTE_ADDR'} = $next_ip->();
 		local $_ = 'sentinel';
-		HTTP::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->());
+		Web::VWF::Allow::allow(info => Local::Info->new(tmpdir => $dir), cache => $quiet_cache->());
 		is($_, 'sentinel', '$_ unchanged');
 		restore_all();
 	};
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Display' => sub {
+subtest 'Web::VWF::Display' => sub {
 	fresh();
 	my $dir = tempdir(CLEANUP => 1);
 
 	local %ENV = %ENV;
 	delete @ENV{qw(HTTP_REFERER REMOTE_ADDR CONFIG_DIR root_dir DOCUMENT_ROOT)};
 
-	# A template tree: <root>/templates/web/HTTP/VWF/Display.tmpl, plus a
+	# A template tree: <root>/templates/web/Web/VWF/Display.tmpl, plus a
 	# French one to check that the language is preferred
 	my $root = File::Spec->catdir($dir, 'site');
 	my $write = sub {
@@ -1498,16 +1498,16 @@ subtest 'HTTP::VWF::Display' => sub {
 		return $file;
 	};
 	require File::Path;
-	my $web_template = $write->([qw(web HTTP VWF Display.tmpl)], 'Hello [% name %]');
-	my $fr_template = $write->([qw(fr web HTTP VWF Display.tmpl)], 'Bonjour [% name %]');
+	my $web_template = $write->([qw(web Web VWF Display.tmpl)], 'Hello [% name %]');
+	my $fr_template = $write->([qw(fr web Web VWF Display.tmpl)], 'Bonjour [% name %]');
 
 	my $mock_new_collaborators = sub {
 		my (%opts) = @_;
-		$HTTP::VWF::Display::sm = undef;
+		$Web::VWF::Display::sm = undef;
 		mock 'Object::Configure::configure' => sub { return $_[1] };
 		mock_config_abstraction($opts{'config'} // { root_dir => $root });
 		mock 'HTML::SocialMedia::new' => sub { return bless({}, 'Local::SocialMedia') };
-		mock 'HTTP::VWF::Display::create_memory_cache' => sub { return Local::Cache->new() };
+		mock 'Web::VWF::Display::create_memory_cache' => sub { return Local::Cache->new() };
 		mock 'Data::Throttler::new' => sub { return Local::Throttler->new($opts{'throttle'} // 1) };
 		mock_ids();
 		return;
@@ -1517,8 +1517,8 @@ subtest 'HTTP::VWF::Display' => sub {
 		$mock_new_collaborators->();
 		my $info = Local::Info->new(params => { key => 'k1', page => 'about' }, script_dir => $dir);
 		my $lingua = Local::Lingua->new(country => $CONFIG{'allowed_country'});
-		my $display = HTTP::VWF::Display->new(info => $info, lingua => $lingua, config => { extra => 1 }, config_directory => $dir);
-		returns_ok($display, { type => 'object', isa => 'HTTP::VWF::Display' }, 'object');
+		my $display = Web::VWF::Display->new(info => $info, lingua => $lingua, config => { extra => 1 }, config_directory => $dir);
+		returns_ok($display, { type => 'object', isa => 'Web::VWF::Display' }, 'object');
 		is($display->{'config'}{'root_dir'}, $root, 'file configuration loaded');
 		is($display->{'config'}{'extra'}, 1, 'caller configuration merged');
 		is_deeply([@{$display}{qw(key page)}], ['k1', 'about'], 'key and page taken from the request');
@@ -1531,7 +1531,7 @@ subtest 'HTTP::VWF::Display' => sub {
 	subtest 'new - on an object clones it' => sub {
 		my $display = make_display(page => 'one');
 		my $clone = $display->new(page => 'two');
-		isa_ok($clone, 'HTTP::VWF::Display');
+		isa_ok($clone, 'Web::VWF::Display');
 		is($clone->{'page'}, 'two', 'new values win');
 		is($display->{'page'}, 'one', 'original untouched');
 	};
@@ -1539,22 +1539,22 @@ subtest 'HTTP::VWF::Display' => sub {
 	subtest 'new - invalid referer is refused' => sub {
 		$mock_new_collaborators->();
 		local $ENV{'HTTP_REFERER'} = '() { :;}; echo vulnerable';
-		is(HTTP::VWF::Display->new(info => Local::Info->new(script_dir => $dir)), undef, 'returns nothing');
+		is(Web::VWF::Display->new(info => Local::Info->new(script_dir => $dir)), undef, 'returns nothing');
 		is($Local::ConfigAbstraction::NEW_ARGS[0], undef, 'refused before any configuration is read');
 		$ENV{'HTTP_REFERER'} = 'https://www.example.com/';
-		isa_ok(HTTP::VWF::Display->new(info => Local::Info->new(script_dir => $dir)), 'HTTP::VWF::Display', 'valid referer');
+		isa_ok(Web::VWF::Display->new(info => Local::Info->new(script_dir => $dir)), 'Web::VWF::Display', 'valid referer');
 		restore_all();
 	};
 
 	subtest 'new - configuration failure' => sub {
 		$mock_new_collaborators->();
 		mock 'Config::Abstraction::new' => sub { die "bad XML\n" };
-		throws_ok { HTTP::VWF::Display->new(info => Local::Info->new(script_dir => $dir)) }
+		throws_ok { Web::VWF::Display->new(info => Local::Info->new(script_dir => $dir)) }
 			qr/\AConfiguration error: bad XML\n/, 'reader failure is fatal';
 		restore_all();
 		$mock_new_collaborators->(config => undef);
 		$Local::ConfigAbstraction::DATA = undef;
-		throws_ok { HTTP::VWF::Display->new(info => Local::Info->new(script_dir => $dir)) }
+		throws_ok { Web::VWF::Display->new(info => Local::Info->new(script_dir => $dir)) }
 			qr/\AConfiguration error: /, 'no configuration is fatal';
 		restore_all();
 	};
@@ -1564,20 +1564,20 @@ subtest 'HTTP::VWF::Display' => sub {
 		local $ENV{'REMOTE_ADDR'} = $CONFIG{'client_ip'};
 		$Local::IDS::IMPACT = $CONFIG{'display_ids_threshold'} + 1;
 		my $info = Local::Info->new(params => { q => 'attack' }, script_dir => $dir, tmpdir => $dir);
-		throws_ok { HTTP::VWF::Display->new(info => $info) }
+		throws_ok { Web::VWF::Display->new(info => $info) }
 			qr/\A\Q$CONFIG{client_ip}\E: IDS impact is $Local::IDS::IMPACT/, 'attack refused';
 
 		# The threshold is configurable both ways
 		$Local::IDS::IMPACT = $CONFIG{'display_ids_threshold'};
-		isa_ok(HTTP::VWF::Display->new(info => $info), 'HTTP::VWF::Display', 'at the threshold is allowed');
+		isa_ok(Web::VWF::Display->new(info => $info), 'Web::VWF::Display', 'at the threshold is allowed');
 		restore_all();
 		$mock_new_collaborators->(config => { root_dir => $root, security => { ids_threshold => 5 } });
 		$Local::IDS::IMPACT = 6;
-		throws_ok { HTTP::VWF::Display->new(info => $info) } qr/IDS impact is 6/, 'lower configured threshold';
+		throws_ok { Web::VWF::Display->new(info => $info) } qr/IDS impact is 6/, 'lower configured threshold';
 
 		# Search engines are not scanned
-		isa_ok(HTTP::VWF::Display->new(info => Local::Info->new(params => { q => 'x' }, is_search_engine => 1, script_dir => $dir)),
-			'HTTP::VWF::Display', 'search engine not scanned');
+		isa_ok(Web::VWF::Display->new(info => Local::Info->new(params => { q => 'x' }, is_search_engine => 1, script_dir => $dir)),
+			'Web::VWF::Display', 'search engine not scanned');
 		restore_all();
 	};
 
@@ -1586,7 +1586,7 @@ subtest 'HTTP::VWF::Display' => sub {
 		local $ENV{'REMOTE_ADDR'} = $CONFIG{'client_ip'};
 		my $info = Local::Info->new(script_dir => $dir, tmpdir => $dir);
 		my $logger = Local::Logger->new();
-		is(HTTP::VWF::Display->new(info => $info, logger => $logger), undef, 'throttled client gets nothing');
+		is(Web::VWF::Display->new(info => $info, logger => $logger), undef, 'throttled client gets nothing');
 		is_deeply($info->{'status_calls'}, [429], '429 Too Many Requests');
 		is_deeply(\@SLEEPS, [1], 'slowed down');
 		like($logger->messages('info')->[-1], qr/connexion throttled\z/, 'logged');
@@ -1598,7 +1598,7 @@ subtest 'HTTP::VWF::Display' => sub {
 		my $store = File::Spec->catfile($dir, 'throttle');
 		open(my $fh, '>', $store) or die;
 		close($fh);
-		isa_ok(HTTP::VWF::Display->new(info => $info, logger => $logger), 'HTTP::VWF::Display', 'served');
+		isa_ok(Web::VWF::Display->new(info => $info, logger => $logger), 'Web::VWF::Display', 'served');
 		ok(!-e $store, 'store removed');
 		like($logger->messages('notice')->[-1], qr/\ARemoving unparsable YAML file /, 'logged');
 		restore_all();
@@ -1608,9 +1608,9 @@ subtest 'HTTP::VWF::Display' => sub {
 		$mock_new_collaborators->();
 		local $ENV{'REMOTE_ADDR'} = $CONFIG{'client_ip'};
 		my $info = Local::Info->new(script_dir => $dir, tmpdir => $dir);
-		throws_ok { HTTP::VWF::Display->new(info => $info, lingua => Local::Lingua->new(country => $CONFIG{'blocked_country'})) }
+		throws_ok { Web::VWF::Display->new(info => $info, lingua => Local::Lingua->new(country => $CONFIG{'blocked_country'})) }
 			qr/\A\Q$CONFIG{client_ip}\E is from a blacklisted country $CONFIG{blocked_country}/, 'blocked country refused';
-		isa_ok(HTTP::VWF::Display->new(info => $info, lingua => Local::Lingua->new(country => undef)), 'HTTP::VWF::Display', 'unknown country allowed');
+		isa_ok(Web::VWF::Display->new(info => $info, lingua => Local::Lingua->new(country => undef)), 'Web::VWF::Display', 'unknown country allowed');
 		restore_all();
 	};
 
@@ -1619,23 +1619,23 @@ subtest 'HTTP::VWF::Display' => sub {
 		File::Path::make_path($conf);
 		{
 			local $ENV{'CONFIG_DIR'} = '/anything';
-			is(HTTP::VWF::Display::_find_config_dir({}, Local::Info->new()), '/anything', 'CONFIG_DIR wins outright');
+			is(Web::VWF::Display::_find_config_dir({}, Local::Info->new()), '/anything', 'CONFIG_DIR wins outright');
 		}
 		{
 			local $ENV{'root_dir'} = $dir;
-			is(HTTP::VWF::Display::_find_config_dir({}, Local::Info->new()), $conf, 'root_dir/conf');
+			is(Web::VWF::Display::_find_config_dir({}, Local::Info->new()), $conf, 'root_dir/conf');
 		}
 		my $cgi = File::Spec->catdir($dir, 'cgi-bin');
 		File::Path::make_path($cgi);
-		is(HTTP::VWF::Display::_find_config_dir({}, Local::Info->new(script_dir => $cgi)),
+		is(Web::VWF::Display::_find_config_dir({}, Local::Info->new(script_dir => $cgi)),
 			File::Spec->catdir($cgi, File::Spec->updir(), 'conf'), 'beside cgi-bin');
 
 		# When nothing exists the caller's directory is the last resort
 		local $ENV{'HOME'} = File::Spec->catdir($dir, 'no-home');
 		my $logger = Local::Logger->new();
 		my $nowhere = File::Spec->catdir($dir, 'x', 'y');
-		is(HTTP::VWF::Display::_find_config_dir({ config_directory => '/fallback' }, Local::Info->new(script_dir => $nowhere)), '/fallback', 'fallback directory');
-		HTTP::VWF::Display::_find_config_dir({ logger => $logger }, Local::Info->new(script_dir => $nowhere));
+		is(Web::VWF::Display::_find_config_dir({ config_directory => '/fallback' }, Local::Info->new(script_dir => $nowhere)), '/fallback', 'fallback directory');
+		Web::VWF::Display::_find_config_dir({ logger => $logger }, Local::Info->new(script_dir => $nowhere));
 		ok(scalar(@{$logger->messages('debug')}), 'environment logged to help find it');
 	};
 
@@ -1805,10 +1805,10 @@ subtest 'HTTP::VWF::Display' => sub {
 	};
 
 	subtest 'obfuscate' => sub {
-		is(HTTP::VWF::Display::obfuscate('a@b'), '&#97;&#64;&#98;', 'entities');
-		is(HTTP::VWF::Display::obfuscate(''), '', 'empty string');
-		is('x' . HTTP::VWF::Display::obfuscate('ab') . 'y', 'x&#97;&#98;y', 'one string inside a concatenation');
-		is(HTTP::VWF::Display::obfuscate('<"&>'), '&#60;&#34;&#38;&#62;', 'markup characters encoded too');
+		is(Web::VWF::Display::obfuscate('a@b'), '&#97;&#64;&#98;', 'entities');
+		is(Web::VWF::Display::obfuscate(''), '', 'empty string');
+		is('x' . Web::VWF::Display::obfuscate('ab') . 'y', 'x&#97;&#98;y', 'one string inside a concatenation');
+		is(Web::VWF::Display::obfuscate('<"&>'), '&#60;&#34;&#38;&#62;', 'markup characters encoded too');
 	};
 
 	subtest '_types' => sub {
@@ -1858,29 +1858,29 @@ subtest 'HTTP::VWF::Display' => sub {
 	};
 
 	subtest 'cache_key_from_hashref' => sub {
-		my $key = HTTP::VWF::Display::cache_key_from_hashref({ a => 1, b => 2 });
+		my $key = Web::VWF::Display::cache_key_from_hashref({ a => 1, b => 2 });
 		like($key, qr/\A[0-9a-f]{$CONFIG{hex_md5_length}}\z/, 'MD5 hex');
 		my %reordered;
 		$reordered{'b'} = 2;
 		$reordered{'a'} = 1;
-		is(HTTP::VWF::Display::cache_key_from_hashref(\%reordered), $key, 'key order does not matter');
-		isnt(HTTP::VWF::Display::cache_key_from_hashref({ a => 1, b => 3 }), $key, 'values matter');
-		isnt(HTTP::VWF::Display::cache_key_from_hashref({ a => 1, b => '2 ' }), $key, 'whitespace matters');
-		like(HTTP::VWF::Display::cache_key_from_hashref(undef), qr/\A[0-9a-f]{32}\z/, 'undef is fine');
+		is(Web::VWF::Display::cache_key_from_hashref(\%reordered), $key, 'key order does not matter');
+		isnt(Web::VWF::Display::cache_key_from_hashref({ a => 1, b => 3 }), $key, 'values matter');
+		isnt(Web::VWF::Display::cache_key_from_hashref({ a => 1, b => '2 ' }), $key, 'whitespace matters');
+		like(Web::VWF::Display::cache_key_from_hashref(undef), qr/\A[0-9a-f]{32}\z/, 'undef is fine');
 
 		# Data::Dumper settings are global, so they must be put back
 		local $Data::Dumper::Sortkeys = 0;
 		local $Data::Dumper::Indent = 2;
-		HTTP::VWF::Display::cache_key_from_hashref({ x => 1 });
+		Web::VWF::Display::cache_key_from_hashref({ x => 1 });
 		is($Data::Dumper::Sortkeys, 0, 'Sortkeys restored');
 		is($Data::Dumper::Indent, 2, 'Indent restored');
 	};
 
 	subtest 'as_string - cart cookie' => sub {
 		my %seen;
-		mock 'HTTP::VWF::Display::http' => sub { return "Content-Type: text/html\n\n" };
-		mock 'HTTP::VWF::Display::html' => sub { my ($self, $args) = @_; %seen = %{$args}; return '<p>page</p>' };
-		mock 'HTTP::VWF::Display::create_memory_cache' => sub { return Local::Cache->new() };
+		mock 'Web::VWF::Display::http' => sub { return "Content-Type: text/html\n\n" };
+		mock 'Web::VWF::Display::html' => sub { my ($self, $args) = @_; %seen = %{$args}; return '<p>page</p>' };
+		mock 'Web::VWF::Display::create_memory_cache' => sub { return Local::Cache->new() };
 
 		my $display = make_display(info => Local::Info->new(cookies => { cart => 'sku1:2:sku2:1' }));
 		$display->as_string({});
@@ -1909,9 +1909,9 @@ subtest 'HTTP::VWF::Display' => sub {
 	subtest 'as_string - caching and redirects' => sub {
 		my $html_calls = 0;
 		my $cache = Local::Cache->new();
-		mock 'HTTP::VWF::Display::http' => sub { return "Content-Type: text/html\n\n" };
-		mock 'HTTP::VWF::Display::html' => sub { $html_calls++; return '<form>x</form>' };
-		mock 'HTTP::VWF::Display::create_memory_cache' => sub { return $cache };
+		mock 'Web::VWF::Display::http' => sub { return "Content-Type: text/html\n\n" };
+		mock 'Web::VWF::Display::html' => sub { $html_calls++; return '<form>x</form>' };
+		mock 'Web::VWF::Display::create_memory_cache' => sub { return $cache };
 
 		my $display = make_display();
 		my $page;
@@ -1931,7 +1931,7 @@ subtest 'HTTP::VWF::Display' => sub {
 		is_deeply($cache->{'sets'}, [], 'cart pages not cached');
 
 		# A redirect is returned as is, without a body
-		mock 'HTTP::VWF::Display::http' => sub { return "Location: /elsewhere\n\n" };
+		mock 'Web::VWF::Display::http' => sub { return "Location: /elsewhere\n\n" };
 		$html_calls = 0;
 		is(make_display()->as_string({ page => 'redirect' }), "Location: /elsewhere\n\n", 'redirect');
 		is($html_calls, 0, 'no body rendered');
@@ -1946,17 +1946,17 @@ subtest 'HTTP::VWF::Display' => sub {
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Display::captcha' => sub {
+subtest 'Web::VWF::Display::captcha' => sub {
 	fresh();
 	local $ENV{'SCRIPT_NAME'};
 
-	my $config = sub { bless({ recaptcha => { enabled => 1, site_key => 'site' }, @_ }, 'HTTP::VWF::Config') };
+	my $config = sub { bless({ recaptcha => { enabled => 1, site_key => 'site' }, @_ }, 'Web::VWF::Config') };
 	my %seen;
-	my $mock_parent = sub { mock 'HTTP::VWF::Display::html' => sub { %seen = %{$_[1]}; return 'page' } };
+	my $mock_parent = sub { mock 'Web::VWF::Display::html' => sub { %seen = %{$_[1]}; return 'page' } };
 
 	subtest 'html - defaults' => sub {
 		$mock_parent->();
-		my $display = make_display(class => 'HTTP::VWF::Display::captcha', config => $config->());
+		my $display = make_display(class => 'Web::VWF::Display::captcha', config => $config->());
 		is($display->html(), 'page', 'parent renders');
 		is_deeply(\%seen, { site_key => 'site', script_name => '/cgi-bin/page.fcgi', soft_limit => 100, time_window => 60,
 			is_hard_block => 0, request_count => 0 }, 'defaults');
@@ -1967,7 +1967,7 @@ subtest 'HTTP::VWF::Display::captcha' => sub {
 		$mock_parent->();
 		local $ENV{'SCRIPT_NAME'} = '/page';
 		my $logger = Local::Logger->new();
-		my $display = make_display(class => 'HTTP::VWF::Display::captcha', logger => $logger,
+		my $display = make_display(class => 'Web::VWF::Display::captcha', logger => $logger,
 			config => $config->(security => { rate_limiting => { max_requests => 7, time_window => '30s' } }));
 		$display->html(hard_block => 1, request_count => 99);
 		is_deeply(\%seen, { site_key => 'site', script_name => '/page', soft_limit => 7, time_window => 30,
@@ -1979,14 +1979,14 @@ subtest 'HTTP::VWF::Display::captcha' => sub {
 	subtest 'html - refusals' => sub {
 		$mock_parent->();
 		%seen = ();
-		my $display = make_display(class => 'HTTP::VWF::Display::captcha', config => $config->());
+		my $display = make_display(class => 'Web::VWF::Display::captcha', config => $config->());
 		delete $display->{'config'};
 		throws_ok { $display->html() } qr/\AMissing 'config' handle/, 'no config';
-		$display = make_display(class => 'HTTP::VWF::Display::captcha', config => $config->());
+		$display = make_display(class => 'Web::VWF::Display::captcha', config => $config->());
 		delete $display->{'info'};
 		throws_ok { $display->html() } qr/\AMissing 'info' handle/, 'no info';
 		foreach my $recaptcha (undef, {}, { enabled => 0, site_key => 's' }) {
-			$display = make_display(class => 'HTTP::VWF::Display::captcha', config => $config->(recaptcha => $recaptcha));
+			$display = make_display(class => 'Web::VWF::Display::captcha', config => $config->(recaptcha => $recaptcha));
 			throws_ok { $display->html() } qr/\AreCAPTCHA is not enabled in configuration/, 'reCAPTCHA disabled';
 		}
 		is_deeply(\%seen, {}, 'nothing rendered');
@@ -1995,7 +1995,7 @@ subtest 'HTTP::VWF::Display::captcha' => sub {
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Display::index' => sub {
+subtest 'Web::VWF::Display::index' => sub {
 	fresh();
 	local $ENV{'REMOTE_ADDR'};
 
@@ -2003,8 +2003,8 @@ subtest 'HTTP::VWF::Display::index' => sub {
 	my $setup = sub {
 		@rendered = ();
 		$cache = Local::Cache->new();
-		mock 'HTTP::VWF::Display::html' => sub { my $self = shift; push @rendered, [@_]; return 'page' };
-		mock 'HTTP::VWF::Display::index::create_disc_cache' => sub { return $cache };
+		mock 'Web::VWF::Display::html' => sub { my $self = shift; push @rendered, [@_]; return 'page' };
+		mock 'Web::VWF::Display::index::create_disc_cache' => sub { return $cache };
 		return;
 	};
 	my $index_db = bless({ updated => 'today', emails => { alice => 'alice@example.com' } }, 'Local::IndexDB');
@@ -2015,7 +2015,7 @@ subtest 'HTTP::VWF::Display::index' => sub {
 	}
 	my $page = sub {
 		my (%info) = @_;
-		return make_display(class => 'HTTP::VWF::Display::index', info => Local::Info->new(%info));
+		return make_display(class => 'Web::VWF::Display::index', info => Local::Info->new(%info));
 	};
 
 	subtest 'no parameters' => sub {
@@ -2099,7 +2099,7 @@ subtest 'HTTP::VWF::Display::index' => sub {
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Display::meta_data' => sub {
+subtest 'Web::VWF::Display::meta_data' => sub {
 	fresh();
 
 	# Log rows are written in local time
@@ -2114,13 +2114,13 @@ subtest 'HTTP::VWF::Display::meta_data' => sub {
 		*{'Local::VwfLog::type'} = sub { my ($self, $args) = @_; return grep { ref($_) eq 'HASH' && ($_->{'type'} // '') eq $args->{'type'} } @{$self->{'rows'}} };
 		*{'Local::VwfLog::http_code'} = sub { return map { $_->{'http_code'} } grep { ref($_) eq 'HASH' } @{$_[0]->{'rows'}} };
 	}
-	my $display = make_display(class => 'HTTP::VWF::Display::meta_data');
+	my $display = make_display(class => 'Web::VWF::Display::meta_data');
 	my $minute = $CONFIG{'seconds_per_minute'};
 
 	subtest 'html' => sub {
 		my %seen;
-		mock 'HTTP::VWF::Display::html' => sub { %seen = %{$_[1]}; return 'page' };
-		mock 'HTTP::VWF::Display::meta_data::get_server_metrics' => sub { return { cpu_count => 1 } };
+		mock 'Web::VWF::Display::html' => sub { %seen = %{$_[1]}; return 'page' };
+		mock 'Web::VWF::Display::meta_data::get_server_metrics' => sub { return { cpu_count => 1 } };
 		my $rows = $log->(
 			{ time => $stamp->($minute), type => 'web', http_code => 200, duration_ms => 5, template => 't' },
 			{ time => $stamp->($minute), type => 'robot', http_code => 404, duration_ms => 5, template => 't' },
@@ -2140,25 +2140,25 @@ subtest 'HTTP::VWF::Display::meta_data' => sub {
 			*{'Local::SysInfo::ncpu'} = sub { return 4 };
 			*{'Local::SysInfo::cpu_type'} = sub { return 'x86' };
 		}
-		mock 'HTTP::VWF::Display::meta_data::df' => sub { return { per => 42 } };
+		mock 'Web::VWF::Display::meta_data::df' => sub { return { per => 42 } };
 		mock 'Sys::MemInfo::totalmem' => sub { return 1000 };
 		mock 'Sys::MemInfo::freemem' => sub { return 250 };
-		my $m = HTTP::VWF::Display::meta_data->get_server_metrics();
+		my $m = Web::VWF::Display::meta_data->get_server_metrics();
 		returns_ok($m, { type => 'hashref' }, 'hashref');
 		is_deeply($m, { cpu_count => 4, cpu_type => 'x86', disk_used_pct => 42, memory_used_pct => 75 }, 'metrics');
 
 		# Odd readings must not divide by zero or invent numbers
-		mock 'HTTP::VWF::Display::meta_data::df' => sub { return { blocks => 0, bfree => 0 } };
+		mock 'Web::VWF::Display::meta_data::df' => sub { return { blocks => 0, bfree => 0 } };
 		mock 'Sys::MemInfo::totalmem' => sub { return 0 };
-		lives_ok { $m = HTTP::VWF::Display::meta_data->get_server_metrics() } 'empty filesystem and no memory';
+		lives_ok { $m = Web::VWF::Display::meta_data->get_server_metrics() } 'empty filesystem and no memory';
 		is($m->{'disk_used_pct'}, undef, 'no disk percentage');
 		is($m->{'memory_used_pct'}, 0, 'no memory percentage');
-		mock 'HTTP::VWF::Display::meta_data::df' => sub { return };
+		mock 'Web::VWF::Display::meta_data::df' => sub { return };
 		mock 'Sys::MemInfo::totalmem' => sub { return };
-		$m = HTTP::VWF::Display::meta_data->get_server_metrics();
+		$m = Web::VWF::Display::meta_data->get_server_metrics();
 		is($m->{'disk_used_pct'}, undef, 'df failed');
-		mock 'HTTP::VWF::Display::meta_data::df' => sub { return { blocks => 200, bfree => 50 } };
-		is(HTTP::VWF::Display::meta_data->get_server_metrics()->{'disk_used_pct'}, 75, 'computed when per is missing');
+		mock 'Web::VWF::Display::meta_data::df' => sub { return { blocks => 200, bfree => 50 } };
+		is(Web::VWF::Display::meta_data->get_server_metrics()->{'disk_used_pct'}, 75, 'computed when per is missing');
 		restore_all();
 	};
 
@@ -2243,7 +2243,7 @@ subtest 'HTTP::VWF::Display::meta_data' => sub {
 	subtest '_utc_offset' => sub {
 		require Time::Local;
 		my $now = CORE::time();
-		my $offset = HTTP::VWF::Display::meta_data::_utc_offset();
+		my $offset = Web::VWF::Display::meta_data::_utc_offset();
 		returns_ok($offset, { type => 'integer' }, 'integer');
 		is($offset, Time::Local::timegm(localtime($now)) - $now, 'matches the system time zone');
 		is($offset % $CONFIG{'seconds_per_minute'}, 0, 'whole minutes');
@@ -2251,7 +2251,7 @@ subtest 'HTTP::VWF::Display::meta_data' => sub {
 };
 
 # ===========================================================================
-subtest 'HTTP::VWF::Display::table' => sub {
+subtest 'Web::VWF::Display::table' => sub {
 	fresh();
 	my $dir = tempdir(CLEANUP => 1);
 	my $databases = File::Spec->catdir($dir, 'databases');
@@ -2267,22 +2267,22 @@ subtest 'HTTP::VWF::Display::table' => sub {
 	local $ENV{'DOCUMENT_ROOT'};
 	local $ENV{'HOME'} = $dir;
 
-	my $table = sub { return bless({ _config => { root_dir => $dir }, _info => Local::Info->new(), @_ }, 'HTTP::VWF::Display::table') };
+	my $table = sub { return bless({ _config => { root_dir => $dir }, _info => Local::Info->new(), @_ }, 'Web::VWF::Display::table') };
 
 	subtest 'new' => sub {
 		my @calls;
 		mock 'Config::Auto::parse' => sub { push @calls, [@_]; return { root_dir => $dir } };
-		my $t = HTTP::VWF::Display::table->new(info => Local::Info->new(), table => 'people');
-		returns_ok($t, { type => 'object', isa => 'HTTP::VWF::Display::table' }, 'object');
+		my $t = Web::VWF::Display::table->new(info => Local::Info->new(), table => 'people');
+		returns_ok($t, { type => 'object', isa => 'Web::VWF::Display::table' }, 'object');
 		is_deeply($calls[0], [$CONFIG{'domain'}, path => File::Spec->catdir($dir, 'lib', 'conf')], 'site file from ~/lib/conf');
 		memory_cycle_ok($t, 'no cycles');
 		local $ENV{'DOCUMENT_ROOT'} = '/var/www/html';
-		HTTP::VWF::Display::table->new({ info => Local::Info->new() });
+		Web::VWF::Display::table->new({ info => Local::Info->new() });
 		is($calls[1][2], File::Spec->catdir('/var/www/html', File::Spec->updir(), 'lib', 'conf'), 'beside the document root');
 		restore_all();
 
 		mock 'Config::Auto::parse' => sub { die "unparsable\n" };
-		throws_ok { HTTP::VWF::Display::table->new(info => Local::Info->new()) } qr/\AConfiguration error: unparsable\n/, 'parse failure';
+		throws_ok { Web::VWF::Display::table->new(info => Local::Info->new()) } qr/\AConfiguration error: unparsable\n/, 'parse failure';
 		restore_all();
 	};
 
@@ -2307,7 +2307,7 @@ subtest 'HTTP::VWF::Display::table' => sub {
 		is_deeply([sort keys %{$t->fetch_as_hash()}], ['k1', 'k2'], 'keyed by key');
 
 		# Loaded once
-		mock 'HTTP::VWF::Display::table::get_file_path' => sub { die 'must not re-read' };
+		mock 'Web::VWF::Display::table::get_file_path' => sub { die 'must not re-read' };
 		lives_ok { $t->fetch(key => 'k2') } 'cached';
 		restore_all();
 

@@ -1,4 +1,4 @@
-package HTTP::VWF::Data::index;
+package Web::VWF::Data::index;
 
 # The database associated with the index template file
 

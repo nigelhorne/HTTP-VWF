@@ -1,4 +1,4 @@
-package HTTP::VWF::Display::table;
+package Web::VWF::Display::table;
 
 use strict;
 use warnings;

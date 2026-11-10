@@ -1,7 +1,7 @@
-package HTTP::VWF::Allow;
+package Web::VWF::Allow;
 
-use HTTP::VWF::Blacklist;
-use HTTP::VWF::Utils;
+use Web::VWF::Blacklist;
+use Web::VWF::Utils;
 
 # Decide if we're going to allow this client to view the website
 # Usage:
@@ -135,7 +135,7 @@ sub allow {
 		unless(($addr =~ /^192\.168\./) || $info->baidu()) {
 			my $lingua = $args{'lingua'};
 			my $countries = $args{'config'} ? $args{'config'}->{'blacklist_countries'} : undef;
-			if(defined($lingua) && HTTP::VWF::Blacklist->new(countries => $countries)->is_blocked($lingua->country())) {
+			if(defined($lingua) && Web::VWF::Blacklist->new(countries => $countries)->is_blocked($lingua->country())) {
 				if($logger) {
 					$logger->warn("$addr blocked connexion from ", $lingua->country());
 				}
@@ -227,7 +227,7 @@ sub allow {
 	my $cache = $args{'cache'};
 	if(!defined($cache)) {
 		throw Error::Simple('Either cache or config must be given') unless($args{config});
-		$cache = HTTP::VWF::Utils::create_memory_cache(config => $args{'config'}, namespace => __PACKAGE__, logger => $logger);
+		$cache = Web::VWF::Utils::create_memory_cache(config => $args{'config'}, namespace => __PACKAGE__, logger => $logger);
 	}
 	if(defined($cache)) {
 		my $cachecontent = $cache->get($today);

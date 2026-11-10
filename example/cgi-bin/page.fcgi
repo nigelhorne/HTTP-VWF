@@ -13,6 +13,6 @@ use autodie qw(:all);
 
 use FindBin;
 
-use HTTP::VWF;
+use Web::VWF;
 
-HTTP::VWF->new({ directory => "$FindBin::Bin/../conf" })->run();
+Web::VWF->new({ directory => "$FindBin::Bin/../conf" })->run();

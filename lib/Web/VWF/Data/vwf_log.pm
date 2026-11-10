@@ -1,4 +1,4 @@
-package HTTP::VWF::Data::vwf_log;
+package Web::VWF::Data::vwf_log;
 
 # Open /tmp/vwf.log as a database
 # Standard CSV file, with no header line

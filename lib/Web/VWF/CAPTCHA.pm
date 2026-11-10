@@ -1,4 +1,4 @@
-package HTTP::VWF::CAPTCHA;
+package Web::VWF::CAPTCHA;
 
 use strict;
 use warnings;

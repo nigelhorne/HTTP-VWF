@@ -1,9 +1,9 @@
-package HTTP::VWF::Blacklist;
+package Web::VWF::Blacklist;
 
 # Which countries may not use the site.
 #
 # This list used to be written out three times, in page.fcgi for CGI::ACL, in
-# HTTP::VWF::Allow and in VWF::Display, and the copies had drifted apart (Display
+# Web::VWF::Allow and in VWF::Display, and the copies had drifted apart (Display
 # was missing BY, UA and XH).  All three now ask this module.  Sites can set
 # their own list with blacklist_countries in the configuration file.
 

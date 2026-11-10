@@ -1,4 +1,4 @@
-package HTTP::VWF::Display::meta_data;
+package Web::VWF::Display::meta_data;
 
 # Display the meta-data page - the internal status of the server and VWF system
 
@@ -7,7 +7,7 @@ package HTTP::VWF::Display::meta_data;
 use strict;
 use warnings;
 
-use parent 'HTTP::VWF::Display';
+use parent 'Web::VWF::Display';
 
 use Filesys::Df;
 use List::Util qw(max sum0);

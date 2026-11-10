@@ -1,4 +1,4 @@
-package HTTP::VWF::Display;
+package Web::VWF::Display;
 
 # Display a page. Certain variables are available to all templates, such as
 # the stuff in the configuration file
@@ -120,8 +120,8 @@ use Template::Plugin::EnvHash;
 use Template::Plugin::Math;
 use Template::Plugin::JSON;
 use HTML::SocialMedia;
-use HTTP::VWF::Blacklist;
-use HTTP::VWF::Utils qw(create_memory_cache);
+use Web::VWF::Blacklist;
+use Web::VWF::Utils qw(create_memory_cache);
 use Error;
 use File::pfopen;
 use Params::Get;
@@ -249,7 +249,7 @@ sub new
 			# Country based blocking
 			if(my $lingua = $params->{lingua}) {
 				my $country = $lingua->country();
-				if(HTTP::VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->is_blocked($country)) {
+				if(Web::VWF::Blacklist->new(countries => $config->{'blacklist_countries'})->is_blocked($country)) {
 					if($params->{'logger'}) {
 						$params->{'logger'}->warn("$ENV{REMOTE_ADDR} is from a blacklisted country $country");
 					}

@@ -1,8 +1,8 @@
-package HTTP::VWF::Display::captcha;
+package Web::VWF::Display::captcha;
 
 use strict;
 use warnings;
-use parent 'HTTP::VWF::Display';
+use parent 'Web::VWF::Display';
 
 sub html {
 	my $self = shift;

@@ -1,4 +1,4 @@
-package HTTP::VWF::Display::index;
+package Web::VWF::Display::index;
 
 # Display the index page.
 # Certain variables are available to all templates,
@@ -8,11 +8,11 @@ use strict;
 use warnings;
 
 use Carp;
-use HTTP::VWF::Display;
-use HTTP::VWF::Utils qw(create_disc_cache);
+use Web::VWF::Display;
+use Web::VWF::Utils qw(create_disc_cache);
 use String::Random;
 
-our @ISA = ('HTTP::VWF::Display');
+our @ISA = ('Web::VWF::Display');
 
 sub html {
 	my $self = shift;
