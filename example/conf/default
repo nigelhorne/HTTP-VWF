@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <config>
+	<pages>index</pages>
 	<memory_cache>
 		<driver>Null</driver>
 	</memory_cache>
