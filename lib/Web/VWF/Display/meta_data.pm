@@ -74,7 +74,7 @@ sub html {
 		? _scoped_snippet($charts->render_pie_chart_snippet({ data => \@browser, id => 'browser_chart', donut => 1, sort_slices => 'value' }))
 		: '';
 	my $status_chart = @status
-		? _scoped_snippet($charts->render_pie_chart_snippet({ data => \@status, id => 'status_chart_renamed', donut => 1, sort_slices => 'label' }))
+		? _scoped_snippet($charts->render_pie_chart_snippet({ data => \@status, id => 'status_chart', donut => 1, sort_slices => 'label' }))
 		: '';
 	my $rate_chart = @{$rate_24h->{'total'}}
 		? _scoped_snippet($charts->render_multi_series_line_chart_snippet({
