@@ -15,7 +15,7 @@ WriteMakefile(
 	NAME		=> 'Web::VWF',
 	AUTHOR		=> q{Nigel Horne <njh@nigelhorne.com>},
 	ABSTRACT_FROM	=> 'lib/Web/VWF.pm',
-	ABSTRACT	=> 'The Versatile Web Framework as a CPAN distribution',
+	VERSION_FROM	=> 'lib/Web/VWF.pm',
 	((defined($ExtUtils::MakeMaker::VERSION) &&
 	 ($ExtUtils::MakeMaker::VERSION >= 6.3002))
 		? ('LICENSE'=> 'GPL')
