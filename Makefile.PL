@@ -14,7 +14,7 @@ if($^O eq 'darwin') {
 WriteMakefile(
 	NAME		=> 'Web::VWF',
 	AUTHOR		=> q{Nigel Horne <njh@nigelhorne.com>},
-	VERSION_FROM	=> 'lib/Web/VWF.pm',
+	ABSTRACT_FROM	=> 'lib/Web/VWF.pm',
 	ABSTRACT	=> 'The Versatile Web Framework as a CPAN distribution',
 	((defined($ExtUtils::MakeMaker::VERSION) &&
 	 ($ExtUtils::MakeMaker::VERSION >= 6.3002))
@@ -22,17 +22,6 @@ WriteMakefile(
 		: ()),
 	CONFIGURE_REQUIRES => {
 		'ExtUtils::MakeMaker' => 6.64,	# Minimum version for TEST_REQUIRES
-	}, TEST_REQUIRES => {
-		'Data::Validate::URI' => 0,
-		'DateTime' => 0,
-		'HTTP::Response' => 0,
-		'LWP::Simple::WithCache' => 0,
-		'Test::Memory::Cycle' => 0,
-		'Test::Mockingbird' => 0,
-		'Test::Most' => 0,
-		'Test::Returns' => 0,
-		'XML::LibXML' => 0,	# t/function.t builds and parses test documents
-		'YAML' => 0,
 	}, PREREQ_PM => {
 		'Carp' => 0,
 		'Carp::Always' => 0,
@@ -96,6 +85,18 @@ WriteMakefile(
 		'Time::Seconds' => 0,
 		'Timer::Simple' => 0,
 		'Try::Tiny' => 0,
+		'version'       => '0.77',
+	}, TEST_REQUIRES => {
+		'Data::Validate::URI' => 0,
+		'DateTime' => 0,
+		'HTTP::Response' => 0,
+		'LWP::Simple::WithCache' => 0,
+		'Test::Memory::Cycle' => 0,
+		'Test::Mockingbird' => 0,
+		'Test::Most' => 0,
+		'Test::Returns' => 0,
+		'XML::LibXML' => 0,	# t/function.t builds and parses test documents
+		'YAML' => 0,
 	}, dist => $dist,
 	clean => { FILES => 'Web-VWF-*' },
 	META_MERGE => {

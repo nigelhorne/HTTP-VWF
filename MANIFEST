@@ -1,3 +1,5 @@
+Changes
+cpanfile
 example/cgi-bin/page.fcgi
 example/conf/default
 example/templates/web/Web/VWF/Display/index.tmpl

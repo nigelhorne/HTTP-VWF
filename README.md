@@ -1,3 +1,11 @@
+## Name
+
+Web::VWF - Versatile Web Framework - easily build a website to support different languages and client platforms
+
+## Version
+
+Version 0.001.0
+
 ## Description
 
 Web::VWF is [VWF](https://github.com/nigelhorne/vwf), the Versatile Web
@@ -90,3 +98,15 @@ given, or `/usr/lib/vwf`.  [Web::VWF::Config](https://metacpan.org/pod/Web%3A%3A
 The site's configuration, read once and kept: a site that has no `conf/` of its
 own beside `cgi-bin/` is configured from the server's directory for it, and
 [Web::VWF::Config](https://metacpan.org/pod/Web%3A%3AVWF%3A%3AConfig) describes the rest of the search.
+
+## Author
+
+Nigel Horne, `<njh at nigelhorne.com>`
+
+## Licence and Copyright
+
+Copyright 2010-2026 Nigel Horne.
+
+Usage is subject to the GPL2 licence terms.
+If you use it,
+please let me know.

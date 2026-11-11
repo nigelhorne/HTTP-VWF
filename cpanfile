@@ -58,6 +58,7 @@ requires 'Time::Piece';
 requires 'Time::Seconds';
 requires 'Timer::Simple';
 requires 'Try::Tiny';
+requires 'version', '0.77';
 recommends 'Filesys::Df';
 
 on 'configure' => sub {

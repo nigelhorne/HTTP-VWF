@@ -5,7 +5,7 @@ package Web::VWF::Display;
 
 =head1 VERSION
 
-Version 0.01
+Version 0.001.0
 
 =cut
 
@@ -93,7 +93,7 @@ server-side form handling and do not need CSRF tokens at all:
 
 # -----------------------------------------------------------------------
 
-our $VERSION = '0.01';
+use version; our $VERSION = version->declare('0.001.0');
 
 use v5.20;
 use strict;

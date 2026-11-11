@@ -1,13 +1,12 @@
 package Web::VWF;
 
-# The distribution's version: Makefile.PL reads it from here
-our $VERSION = '0.01';
-
 # njh@nigelhorne.com
 
 use strict;
 use warnings;
 # use diagnostics;
+
+use version; our $VERSION = version->declare('0.001.0');
 
 # TODO: Try Log::Any::Adapter::Abstraction instead of Log::Any
 
@@ -178,6 +177,14 @@ my $rate_limit_cache;
 # The CGI::ACL object is built on the first request, once $config is loaded,
 # because the country blacklist (Web::VWF::Blacklist) can come from the config file.
 my $acl;
+
+=head1 NAME
+
+Web::VWF - Versatile Web Framework - easily build a website to support different languages and client platforms
+
+=head1 VERSION
+
+Version 0.001.0
 
 =head1 DESCRIPTION
 
@@ -1466,5 +1473,19 @@ sub DESTROY
 	CHI->stats->flush();
 	Log::WarnDie->dispatcher(undef);
 }
+
+=head1 AUTHOR
+
+Nigel Horne, C<< <njh at nigelhorne.com> >>
+
+=head1 LICENCE AND COPYRIGHT
+
+Copyright 2010-2026 Nigel Horne.
+
+Usage is subject to the GPL2 licence terms.
+If you use it,
+please let me know.
+
+=cut
 
 1;
