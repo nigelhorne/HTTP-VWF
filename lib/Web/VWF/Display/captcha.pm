@@ -9,7 +9,7 @@ sub html {
 	my %args = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
 
 	my $config = $self->{'config'} or die "Missing 'config' handle";
-	my $info = $self->{'info'} or die "Missing 'info' handle";
+	$self->{'info'} or die "Missing 'info' handle";
 
 	# Get reCAPTCHA configuration
 	my $recaptcha_config = $config->recaptcha();

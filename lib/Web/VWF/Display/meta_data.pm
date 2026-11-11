@@ -181,7 +181,7 @@ sub get_server_metrics {
 # ------------------------------
 
 sub get_traffic_metrics {
-	my ($self, $vwf_log, $domain_name) = @_;
+	my (undef, $vwf_log, $domain_name) = @_;
 	my $metrics = {};
 
 	# Current time and one hour ago (local time)
@@ -232,7 +232,7 @@ sub get_traffic_metrics {
 }
 
 sub get_request_rate_24h {
-	my ($self, $vwf_log, $domain_name) = @_;
+	my (undef, $vwf_log, $domain_name) = @_;
 
 	my $now = time();
 	my $start = $now - ONE_DAY + _utc_offset();
@@ -278,7 +278,7 @@ sub get_request_rate_24h {
 }
 
 sub get_latency_24h {
-	my ($self, $vwf_log, $domain_name) = @_;
+	my (undef, $vwf_log, $domain_name) = @_;
 
 	my $start = time() - ONE_DAY + _utc_offset();
 
@@ -327,7 +327,7 @@ sub get_latency_24h {
 }
 
 sub get_slow_endpoints_24h {
-	my ($self, $vwf_log, $domain_name) = @_;
+	my (undef, $vwf_log, $domain_name) = @_;
 
 	my $start = time() - ONE_DAY + _utc_offset();
 

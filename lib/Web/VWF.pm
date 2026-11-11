@@ -1122,7 +1122,8 @@ sub send_error
 # say "none" as well as saying nothing.
 sub _config_list
 {
-	my ($self, $config, $key, @defaults) = @_;
+	# The invocant is not used: the setting and its defaults are all this needs.
+	my (undef, $config, $key, @defaults) = @_;
 
 	my $value = $config->{$key};
 	return @defaults unless(defined($value));
@@ -1445,8 +1446,6 @@ sub DESTROY
 	if(defined($^V) && ($^V ge 'v5.14.0')) {
 		return if ${^GLOBAL_PHASE} eq 'DESTRUCT';	# >= 5.14.0 only
 	}
-
-	my $self = shift;
 
 	# Clean up resources before shutdown
 	$logger->info('Shutting down') if(defined($logger));

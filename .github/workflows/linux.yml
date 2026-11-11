@@ -49,6 +49,10 @@ jobs:
           cpanm --skip-satisfied -qn Crypt::URandom File::pfopen Timer::Simple File::Slurp
           cpanm --skip-satisfied -qn Filesys::Df Sys::MemInfo Sys::Uptime System::Info Data::Validate::URI Params::Validate::Strict HTML::D3
           cpanm --skip-satisfied -qn Test::Most Readonly IP::Country::Fast CGI::Info~1.14
+          # Makefile.PL's TEST_REQUIRES, which the manual list above does not
+          # read.  Without Test::Returns, t/function.t dies on its own use line
+          # before it runs a single test.
+          cpanm --skip-satisfied -qn Test::Returns Test::Memory::Cycle HTTP::Response YAML
       - name: Run Tests
         run: |
           # The whole suite, so a test added later is covered here without
@@ -59,16 +63,22 @@ jobs:
           # Rendering page.fcgi, and reading the access log it writes, is
           # t/page-render.t's work rather than this step's.
           prove -l t/
-          cd cgi-bin
+          # page.fcgi lives in the example site, not at the repository root.
+          # -Ilib is needed because the distribution itself is not installed,
+          # only its dependencies are.
           # The two lint checks are on what perl said, not on what perl's exit
           # status was.  B::Lint and warnings::unused report what they find as
           # warnings, and a warning leaves the status at 0: `perl -c -MO=Lint`
           # answered 0 here while printing six findings, so a check that only
           # looked at the status could never fail.  What a clean run prints is
           # "syntax OK" and nothing else.
+          # warnings::unused 0.06 cannot read the signature parameters that
+          # 5.44 compiles to state lexicals: it reports every one of them as
+          # unused, used or not.  Only that shape is dropped; a plain "my"
+          # variable is still a finding.
           no_findings() {
                   said=$("$@" 2>&1) || { printf '%s\n' "$said" >&2; return 1; }
-                  if found=$(printf '%s\n' "$said" | grep -v -e 'syntax OK$' -e '^$'); then
+                  if found=$(printf '%s\n' "$said" | grep -v -e 'syntax OK$' -e '^$' -e 'Unused variable state \$'); then
                           printf '%s\n' "$said" >&2
                           return 1
                   fi
@@ -78,9 +88,8 @@ jobs:
           # `open(STDERR, ...)` as calls to subroutines called close and open
           # that do not exist - six times over this script - so left on it
           # would fail every run rather than catch anything.
-          no_findings perl -c -MO=Lint,no-undefined-subs ./page.fcgi ''
-          no_findings perl -c -Mwarnings::unused ./page.fcgi ''
-          cd ..
+          no_findings perl -Ilib -c -MO=Lint,no-undefined-subs example/cgi-bin/page.fcgi ''
+          no_findings perl -Ilib -c -Mwarnings::unused example/cgi-bin/page.fcgi ''
           # Every module as well, not only the ones page.fcgi loads.  Its use
           # lines compile a handful of them, but the page modules are required
           # at run time, from the pages a configuration names, so a variable
@@ -105,7 +114,8 @@ jobs:
                   exit 1
           fi
           echo "warnings::unused: $modules_checked module(s) under lib/ have no unused variables"
-          cd t && prove get_params && root_dir=$(realpath $(pwd)/..) prove get_template_path
+          # get_params and get_template_path used to be separate test files;
+          # both are subtests of t/function.t now, which prove -l t/ above ran.
       - name: Install a headless browser for the chart test
         env:
           # Both sides are pinned: the test asserts that this browser drew

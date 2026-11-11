@@ -207,7 +207,7 @@ sub _validate_cache_config($config, $cache_type) {
 	}
 
 	# Validate memory parameters
-	if(exists($cache_config->{'datastore'}) && exists($cache_config->{'global'}) && (my $driver = $cache_config->{'driver'})) {
+	if(exists($cache_config->{'datastore'}) && exists($cache_config->{'global'}) && $cache_config->{'driver'}) {
 		# CHI catches this as well, but putting it here helps to track the error
 		croak('Memory cache cannot have both global and datastore');
 	}
@@ -386,7 +386,7 @@ sub _parse_server_config($config, $logger) {
 
 		# Validate server format
 		if ($server_entry =~ /\A([a-zA-Z0-9.-]+):(\d+)\z/) {
-			my ($host, $port) = ($1, $2);
+			my $port = $2;
 			croak "Invalid port number: $port" unless $port > 0 && $port <= 65535;
 			push @servers, $server_entry;
 			$logger->debug("Added server: $server_entry") if $logger;
