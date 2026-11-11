@@ -20,6 +20,7 @@ use Test::Most;
 use Test::Mockingbird;
 
 use File::Spec;
+use File::Temp qw(tempdir);
 use FindBin qw($Bin);
 use JSON::MaybeXS qw(decode_json);
 use POSIX qw(strftime);
@@ -88,6 +89,59 @@ sub chart_points
 	return $points;
 }
 
+# The first headless browser we can find, or undef.  CI names the one it
+# installed in CHROME_BIN; anywhere without a browser the DOM test skips.
+sub find_browser
+{
+	my @names = grep { defined($_) && length($_) } ($ENV{'CHROME_BIN'}, qw(chromium chromium-browser google-chrome google-chrome-stable));
+
+	foreach my $name (@names) {
+		return $name if($name =~ m{/} && -x $name);
+
+		foreach my $dir (File::Spec->path()) {
+			my $path = File::Spec->catfile($dir, $name);
+			return $path if -x $path;
+		}
+	}
+
+	return;
+}
+
+# What the browser calls itself, for the log.  CI pins one chromium and one
+# D3, and the log should name the pair that actually drew the charts rather
+# than the pair the workflow meant to install.
+sub browser_version
+{
+	my ($browser) = @_;
+
+	open(my $fh, '-|', $browser, '--version') or return;
+	my $line = <$fh>;
+	close($fh);
+	return unless defined($line);
+	$line =~ s/\s+\z//;
+
+	return $line;
+}
+
+# How many drawing marks a browser put inside one chart's SVG.  Legends live
+# outside the SVG and axis labels are text, so both count only when a snippet
+# puts them there; a chart that never ran has no marks at all.
+#
+# The DOM is cut out by id and counted with a regex rather than parsed as a
+# tree: HTML::TreeBuilder and other HTML4 parsers treat the contents of an
+# <svg> element as CDATA, so they throw away exactly the marks being counted.
+sub svg_marks
+{
+	my ($dom, $id) = @_;
+
+	my ($svg) = $dom =~ /<svg\b[^>]*\bid="\Q$id\E"[^>]*>(.*?)<\/svg>/s;
+	return 0 unless defined($svg);
+
+	my $count = () = $svg =~ /<(?:path|rect|circle|line|polyline|text)\b/g;
+
+	return $count;
+}
+
 my $stamp = sub { strftime('%Y-%m-%d %H:%M:%S', localtime(CORE::time() - shift)) };
 my $when = $stamp->(60);
 
@@ -138,6 +192,142 @@ foreach my $id (@CHARTS) {
 	unlike($html, qr/<svg/, "$id is not rendered as a blank frame");
 	like($html, qr/\Q$EMPTY_TEXT{$id}\E/, "$id explains why it is empty");
 }
+
+# The example's template is the one a site copies, so these tests render that
+# file - not a stand-in - with the chart variables and inspect the finished
+# HTML.
+sub render_example_template
+{
+	my ($vars) = @_;
+
+	require Template;
+
+	my $templates = File::Spec->catdir($Bin, File::Spec->updir(), 'example', 'templates');
+	my $template = File::Spec->catfile('web', 'Web', 'VWF', 'Display', 'meta_data.tmpl');
+	die "Missing example template $template\n" unless -f File::Spec->catfile($templates, $template);
+
+	my $tt = Template->new({ INCLUDE_PATH => $templates }) or die Template->error();
+	my $output = '';
+	$tt->process($template, $vars, \$output) or die $tt->error();
+
+	return $output;
+}
+
+# The placeholders above only help if the real template prints them.  The log
+# here has nothing that can draw a chart, so every panel must explain itself.
+subtest 'the example template prints every placeholder' => sub {
+	my $output = render_example_template(\%chart);
+
+	like($output, qr{<script src="https://d3js\.org/d3\.v7\.min\.js"></script>}, 'loads D3 once');
+	unlike($output, qr/<svg/, 'no chart is drawn from nothing');
+	foreach my $id (@CHARTS) {
+		like($output, qr/\Q$EMPTY_TEXT{$id}\E/, "$id placeholder reaches the page");
+	}
+};
+
+# Two requests fill four panels, but ranking an endpoint needs five samples:
+# the slow panel alone must still explain itself, and the other four must not.
+subtest 'a two-request log draws four charts and one placeholder' => sub {
+	my @sparse = (
+		{ time => $when, ip => '10.0.3.1', type => 'web', http_code => 200, duration_ms => 120, template => '/srv/templates/web/index.tmpl' },
+		{ time => $when, ip => '10.0.3.2', type => 'web', http_code => 200, duration_ms => 340, template => '/srv/templates/web/index.tmpl' },
+	);
+
+	%chart = ();
+	$display->html(vwf_log => Local::VwfLog->new(@sparse));
+	my $output = render_example_template(\%chart);
+
+	foreach my $id (qw(browser_chart status_chart rate_chart latency_chart)) {
+		like($output, qr/<svg id="\Q$id\E"/, "$id draws in the page");
+		unlike($output, qr/\Q$EMPTY_TEXT{$id}\E/, "$id is not a placeholder");
+	}
+	like($output, qr/\Q$EMPTY_TEXT{'slow_chart'}\E/, 'the slow panel explains why it is empty');
+	unlike($output, qr/<svg id="slow_chart"/, 'the slow panel has no empty frame');
+};
+
+# Five samples from one endpoint is the smallest log that can rank it.  Every
+# panel must draw from that, including the slow one, and none may fall back to
+# a placeholder.
+subtest 'a five-request log from one endpoint fills every panel' => sub {
+	my @same = map {
+		{
+			time => $when, ip => "10.0.4.$_", type => 'web', http_code => 200,
+			duration_ms => 100 + ($_ * 50), template => '/srv/templates/web/index.tmpl',
+		}
+	} 1 .. 5;
+
+	%chart = ();
+	$display->html(vwf_log => Local::VwfLog->new(@same));
+	my $output = render_example_template(\%chart);
+
+	like($output, qr{<script src="https://d3js\.org/d3\.v7\.min\.js"></script>}, 'loads D3 once');
+	foreach my $id (@CHARTS) {
+		like($output, qr/<svg id="\Q$id\E"/, "$id draws in the page");
+		unlike($output, qr/\Q$EMPTY_TEXT{$id}\E/, "$id is not a placeholder");
+	}
+	my $svgs = () = $output =~ /<svg id="/g;
+	is($svgs, scalar(@CHARTS), 'every panel has one chart');
+};
+
+# The inspector itself is checked on a hand-built DOM, so it cannot silently
+# report marks for everything
+subtest 'the DOM inspector' => sub {
+	my $sample = '<html><body><svg id="browser_chart"><g><path d="M0 0h1"></path><text>1</text></g></svg><svg id="status_chart"></svg></body></html>';
+	is(svg_marks($sample, 'browser_chart'), 2, 'counts paths and text inside the chart');
+	is(svg_marks($sample, 'status_chart'), 0, 'an empty SVG has no marks');
+	is(svg_marks($sample, 'missing_chart'), 0, 'a missing SVG has no marks');
+};
+
+# The data checks above stop a chart from being blank because it has nothing
+# to draw; only a browser proves D3 turns the data into marks.  CI installs
+# chromium for this, so it runs there and skips on a machine without one.
+subtest 'the five charts draw in a real browser' => sub {
+	my $browser = find_browser();
+	if(!$browser) {
+		plan skip_all => 'No headless browser found (CI installs chromium for this test)';
+	}
+	my $chromium = browser_version($browser);
+
+	# Render the chart area again, then wrap it in the same page shape as the
+	# template: D3 once in the head, one snippet after another in the body
+	%chart = ();
+	$display->html(vwf_log => Local::VwfLog->new(@rows));
+	my $d3 = $ENV{'D3_URL'} // 'https://d3js.org/d3.v7.min.js';
+	my $page = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>charts</title>'
+		. '<script src="' . $d3 . '"></script>'
+		# Record what the page loaded, not what we asked for: a CDN or a
+		# changed file serving another version must show up in the log.
+		. '<script>document.documentElement.setAttribute("data-d3-version", (typeof d3 === "undefined" ? "not loaded" : d3.version));</script>'
+		. '</head><body>'
+		. join("\n", map { $chart{$_} // '' } @CHARTS)
+		. '</body></html>';
+
+	my $dir = tempdir(CLEANUP => 1);
+	my $file = File::Spec->catfile($dir, 'charts.html');
+	open(my $out, '>', $file) or die "Can't write $file: $!";
+	print $out $page;
+	close($out);
+
+	# --dump-dom returns the page once it has loaded, so the blocking D3 script
+	# and every snippet have run.  The virtual time budget lets a slow script
+	# answer first; there is no sandbox because CI runs this as root in a
+	# container, and no GPU because there is nothing to draw to.
+	open(my $fh, '-|', $browser,
+		'--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
+		"--user-data-dir=$dir", '--hide-scrollbars', '--virtual-time-budget=15000',
+		'--dump-dom', "file://$file");
+	my $dom = do { local $/; <$fh> };
+	my $status = close($fh);
+
+	my ($d3_version) = ($dom // '') =~ /data-d3-version="([^"]*)"/;
+	diag('Chromium: ' . ($chromium // 'unknown') . '; D3: ' . ($d3_version // 'unknown'));
+
+	ok(length($dom // ''), 'the browser returned a DOM');
+	diag("browser exited with status $status") unless $status;
+	foreach my $id (@CHARTS) {
+		cmp_ok(svg_marks($dom // '', $id), '>=', 1, "$id drew marks");
+	}
+};
 
 restore_all();
 

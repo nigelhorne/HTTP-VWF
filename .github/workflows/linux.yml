@@ -106,3 +106,29 @@ jobs:
           fi
           echo "warnings::unused: $modules_checked module(s) under lib/ have no unused variables"
           cd t && prove get_params && root_dir=$(realpath $(pwd)/..) prove get_template_path
+      - name: Install a headless browser for the chart test
+        env:
+          # Both sides are pinned: the test asserts that this browser drew
+          # marks with this D3, so a silent upgrade of either could change
+          # what is being tested.  Debian drops superseded chromium packages,
+          # so an install failure here means bumping these deliberately.
+          CHROMIUM_VERSION: '156.0.8078.79-1~deb13u1'
+          D3_VERSION: '7.9.2'
+          D3_SHA256: '912111098ea99503a6f4967361d2bbdc9dbf58cf9c678c8e27e5b02d1a07f0c1'
+        run: |
+          # chromium is the browser the test drives; the fonts give its axis
+          # labels something to draw with.  The test skips without a browser,
+          # so installing it here is what makes the DOM check run at all.
+          apt update -q -y
+          DEBIAN_FRONTEND=noninteractive apt install -y "chromium=${CHROMIUM_VERSION}" fonts-dejavu-core curl
+          chromium --version
+          # The page names the same D3 the template loads, saved at the version
+          # above.  Fetching it once here means a CDN hiccup cannot look like a
+          # chart that failed to draw, and the checksum makes a changed file a
+          # failure rather than something that quietly runs.
+          curl -fsSL "https://cdn.jsdelivr.net/npm/d3@${D3_VERSION}/dist/d3.min.js" -o /tmp/d3.v7.min.js
+          echo "${D3_SHA256}  /tmp/d3.v7.min.js" | sha256sum -c -
+      - name: Draw the meta_data charts in a real browser
+        env:
+          D3_URL: file:///tmp/d3.v7.min.js
+        run: prove -l t/meta-data-charts.t
