@@ -12,7 +12,17 @@ use version; our $VERSION = version->declare('0.002.0');
 use parent 'Web::VWF::Display';
 
 use HTML::D3;
-use Filesys::Df;
+
+# Filesys::Df refuses to install on Windows, so Makefile.PL does not require it
+# there.  A server without it just has no disk figure: df() then answers as if
+# the call had failed, which get_server_metrics() already copes with.
+BEGIN {
+	if(!eval { require Filesys::Df; Filesys::Df->import(); 1 }) {
+		no strict 'refs';	## no critic (ProhibitNoStrict)
+		*{__PACKAGE__ . '::df'} = sub { return };
+	}
+}
+
 use List::Util qw(max sum0);
 use Scalar::Util qw(looks_like_number);
 use POSIX qw(strftime);
