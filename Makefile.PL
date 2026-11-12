@@ -12,7 +12,7 @@ if($^O eq 'darwin') {
 }
 
 WriteMakefile(
-	NAME		=> 'Web::VWF',
+	NAME => 'Web::VWF',
 	AUTHOR		=> q{Nigel Horne <njh@nigelhorne.com>},
 	ABSTRACT_FROM	=> 'lib/Web/VWF.pm',
 	VERSION_FROM	=> 'lib/Web/VWF.pm',
@@ -95,6 +95,7 @@ WriteMakefile(
 	}, TEST_REQUIRES => {
 		'File::Copy::Recursive' => 0,	# t/example-site.t, to run the example from a copy
 		'HTTP::Response' => 0,
+		'Test::DescribeMe' => 0,
 		'Test::Memory::Cycle' => 0,
 		'Test::Mockingbird' => 0,
 		'Test::Most' => 0,

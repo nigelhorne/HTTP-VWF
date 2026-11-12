@@ -66,7 +66,7 @@ requires 'XML::LibXML';   # Allow.pm, parses the DShield feed
 requires 'YAML';   # Throttle.pm, Allow.pm and Display.pm
 requires 'version', '0.77';
 recommends 'Filesys::Df';
-recommends 'Mail::DKIM';   # Signed mail from Web::VWF::Mail
+recommends 'Mail::DKIM';
 
 on 'configure' => sub {
 	requires 'ExtUtils::MakeMaker', '6.64';   # Minimum version for TEST_REQUIRES
@@ -75,6 +75,7 @@ on 'configure' => sub {
 on 'test' => sub {
 	requires 'File::Copy::Recursive';   # t/example-site.t, to run the example from a copy
 	requires 'HTTP::Response';
+	requires 'Test::DescribeMe';
 	requires 'Test::Memory::Cycle';
 	requires 'Test::Mockingbird';
 	requires 'Test::Most';
