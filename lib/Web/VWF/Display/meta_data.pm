@@ -7,6 +7,8 @@ package Web::VWF::Display::meta_data;
 use strict;
 use warnings;
 
+use version; our $VERSION = version->declare('0.002.0');
+
 use parent 'Web::VWF::Display';
 
 use HTML::D3;

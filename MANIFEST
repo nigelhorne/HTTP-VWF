@@ -26,3 +26,7 @@ README.md
 t/function.t
 t/mail.t
 t/meta-data-charts.t
+t/example-site.t
+t/pod.t
+t/redact.t
+t/version.t

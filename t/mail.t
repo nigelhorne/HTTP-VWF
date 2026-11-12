@@ -151,4 +151,13 @@ subtest 'sendmail that cannot be run' => sub {
 	ok(scalar(grep { /Cannot run/ } @warnings), 'the failure is explained');
 };
 
+subtest 'an envelope sender that could be an option or a header is refused' => sub {
+	foreach my $from ('-X/etc/passwd', "a\@example.com\nBcc: x\@example.com", 'a b@example.com', "a\@example.com\0") {
+		(my $label = $from) =~ s/[^\x20-\x7e]/?/g;
+		throws_ok { Web::VWF::Mail->new(from => $from) } qr/from is not a valid envelope sender/, "refuses '$label'";
+	}
+	throws_ok { Web::VWF::Mail->new() } qr/from is required/, 'from is required';
+	lives_ok { Web::VWF::Mail->new(from => 'no-reply@example.com') } 'an ordinary sender is accepted';
+};
+
 done_testing();

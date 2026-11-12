@@ -7,6 +7,8 @@ package Web::VWF::Display::index;
 use strict;
 use warnings;
 
+use version; our $VERSION = version->declare('0.002.0');
+
 use Carp;
 use Web::VWF::Display;
 use Web::VWF::Utils qw(create_disc_cache);
@@ -117,13 +119,13 @@ sub html {
 	}
 
 	# Rate limit for sending e-mails
-        if(my $remote_addr = $ENV{'REMOTE_ADDR'}) {
-                if(($self->{'mailfrom'}->{$remote_addr} // 0) >= 2) {
-                        $self->{_logger}->info("E-mail blocked to $to") if($self->{_logger});
-                        return $self->SUPER::html({ error => 'You have reached your limit for sendmail e-mails' });
-                }
-                $self->{'mailfrom'}->{$remote_addr}++;
-        }
+	if(my $remote_addr = $ENV{'REMOTE_ADDR'}) {
+		if(($self->{'mailfrom'}->{$remote_addr} // 0) >= 2) {
+			$self->{_logger}->info("E-mail blocked to $to") if($self->{_logger});
+			return $self->SUPER::html({ error => 'You have reached your limit for sendmail e-mails' });
+		}
+		$self->{'mailfrom'}->{$remote_addr}++;
+	}
 
 	# Send the email.  The sender is in the site's own domain because that is
 	# the domain the configured key signs for: a From anywhere else would fail

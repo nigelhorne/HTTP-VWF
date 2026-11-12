@@ -20,7 +20,7 @@ use warnings;
 use Carp;
 use Readonly;
 
-our $VERSION = '0.01';
+use version; our $VERSION = version->declare('0.002.0');
 
 Readonly::Scalar my $DEFAULT_SENDMAIL => '/usr/sbin/sendmail';
 
@@ -77,17 +77,76 @@ The envelope sender matters as much as the header: sendmail fills in the web
 user and this host when it is given nothing, and a receiving site is entitled
 to reject that.
 
+C<new> croaks, with C<from is required>, when C<from> is missing, and with
+C<from is not a valid envelope sender> when it holds a control character, a
+space or a leading C<->.  The address is passed to sendmail(1) as an
+argument, and a value such as C<-X/etc/passwd> or one with a line break in it
+would otherwise be read as an option or as an extra header.
+
+=head3 API SPECIFICATION
+
+=head4 INPUT
+
+	{
+		from => { type => 'string', min => 1 },
+		domain => { type => 'string', optional => 1 },
+		selector => { type => 'string', optional => 1 },
+		keyfile => { type => 'string', optional => 1 },
+		sendmail => { type => 'string', optional => 1 },
+	}
+
+=head4 OUTPUT
+
+	{ type => 'object', isa => 'Web::VWF::Mail' }
+
 =head2 print
 
 Appends text to the message.  The arguments are joined exactly as C<print>
 would join them, so a caller can keep writing one C<print> statement per
-header.
+header.  It always returns true.
+
+=head3 API SPECIFICATION
+
+=head4 INPUT
+
+	{ text => { type => 'string', optional => 1 } }	# any number of strings
+
+=head4 OUTPUT
+
+	{ type => 'integer', value => 1 }
 
 =head2 close
 
 Signs the message, pipes it to sendmail(1), and returns true if sendmail
 exited cleanly.  Calling it a second time returns the first result without
 sending the message again, so it is safe in an END block.
+
+It returns false, after a C<carp> naming the program and the reason, when
+sendmail(1) cannot be run, and false when it can be run but exits with a
+failure status or the message cannot be written to it.  Problems with signing
+are never failures: they warn, and the message goes out unsigned.
+
+=head3 API SPECIFICATION
+
+=head4 INPUT
+
+	{}
+
+=head4 OUTPUT
+
+	{ type => 'integer', min => 0, max => 1 }	# 1 if sendmail exited cleanly
+
+=head1 AUTHOR
+
+Nigel Horne, C<< <njh at nigelhorne.com> >>
+
+=head1 LICENCE AND COPYRIGHT
+
+Copyright 2026 Nigel Horne.
+
+Usage is subject to the GPL2 licence terms.
+If you use it,
+please let me know.
 
 =cut
 
@@ -96,6 +155,11 @@ sub new {
 	my %args = (ref($_[0]) eq 'HASH') ? %{$_[0]} : @_;
 
 	croak('from is required') unless($args{'from'});
+
+	# The sender is an argument to sendmail -f, and goes there without a shell,
+	# so the risk is not shell injection but option injection (a leading '-')
+	# and a line break that sendmail -t could treat as the start of a header.
+	croak('from is not a valid envelope sender') if($args{'from'} =~ /[\x00-\x20\x7f]/ || $args{'from'} =~ /\A-/);
 
 	my $self = {
 		'from' => $args{'from'},
@@ -132,9 +196,13 @@ sub close {
 		return $self->{'status'} = 0;
 	};
 
-	print $fh $message;
+	# A failed write is not enough to report on its own, because sendmail may
+	# have exited before reading; close() on a pipe reports the exit status
+	# either way, so both are combined.
+	my $written = CORE::print($fh $message);
+	my $closed = CORE::close($fh);
 
-	$self->{'status'} = close($fh) ? 1 : 0;
+	$self->{'status'} = ($written && $closed) ? 1 : 0;
 
 	return $self->{'status'};
 }

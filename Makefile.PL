@@ -18,7 +18,7 @@ WriteMakefile(
 	VERSION_FROM	=> 'lib/Web/VWF.pm',
 	((defined($ExtUtils::MakeMaker::VERSION) &&
 	 ($ExtUtils::MakeMaker::VERSION >= 6.3002))
-		? ('LICENSE'=> 'GPL')
+		? ('LICENSE'=> 'gpl_2')
 		: ()),
 	CONFIGURE_REQUIRES => {
 		'ExtUtils::MakeMaker' => 6.64,	# Minimum version for TEST_REQUIRES
@@ -37,7 +37,9 @@ WriteMakefile(
 		'Crypt::URandom' => 0,		# CSPRNG for CSRF tokens
 		'Data::Dumper' => 0,
 		'Data::Throttler' => 0,
+		'Data::Validate::URI' => 0,	# Allow.pm and Display.pm, to check Referer URLs
 		'Database::Abstraction' => 0,
+		'DateTime' => 0,		# Allow.pm, for the DShield feed date
 		'DBD::CSV' => 0,
 		'DBI' => 0,
 		'Digest::MD5' => 0,
@@ -63,6 +65,7 @@ WriteMakefile(
 		'JSON::MaybeXS' => 0,
 		'Log::Abstraction' => 0,
 		'Log::WarnDie' => 0.09,
+		'LWP::Simple::WithCache' => 0,	# Allow.pm, the DShield feed
 		'LWP::UserAgent' => 0,
 		'Module::Runtime' => 0,		# Safe dynamic loading; avoids string eval
 		'Object::Configure' => 0,
@@ -83,20 +86,19 @@ WriteMakefile(
 		'Time::HiRes' => 0,
 		'Time::Piece' => 0,
 		'Time::Seconds' => 0,
+		'Time::Duration::Parse' => 0,	# VWF.pm, rate-limit durations such as '5 minutes'
 		'Timer::Simple' => 0,
 		'Try::Tiny' => 0,
 		'version'       => '0.77',
+		'XML::LibXML' => 0,		# Allow.pm, parses the DShield feed
+		'YAML' => 0,			# Throttle.pm, Allow.pm and Display.pm
 	}, TEST_REQUIRES => {
-		'Data::Validate::URI' => 0,
-		'DateTime' => 0,
+		'File::Copy::Recursive' => 0,	# t/example-site.t, to run the example from a copy
 		'HTTP::Response' => 0,
-		'LWP::Simple::WithCache' => 0,
 		'Test::Memory::Cycle' => 0,
 		'Test::Mockingbird' => 0,
 		'Test::Most' => 0,
 		'Test::Returns' => 0,
-		'XML::LibXML' => 0,	# t/function.t builds and parses test documents
-		'YAML' => 0,
 	}, dist => $dist,
 	clean => { FILES => 'Web-VWF-*' },
 	META_MERGE => {
@@ -114,6 +116,8 @@ WriteMakefile(
 				},
 			},
 		},
+		# example/ is a site to copy, not code to index.
+		no_index => { directory => ['example', 't'] },
 		resources => {
 			repository => {
 				type => 'git',
