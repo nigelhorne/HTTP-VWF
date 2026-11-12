@@ -101,11 +101,19 @@ WriteMakefile(
 	clean => { FILES => 'Web-VWF-*' },
 	META_MERGE => {
 		'meta-spec' => { version => 2 },
-		# On Windows Filesys::Df is not required, because it cannot be
-		# installed there - so say what it is for instead (see PREREQ_PM).
-		(($^O eq 'MSWin32')
-			? (prereqs => { runtime => { recommends => { 'Filesys::Df' => 0 } } })
-			: ()),
+		prereqs => {
+			runtime => {
+				recommends => {
+					# Web::VWF::Mail signs with DKIM when a site configures a key,
+					# and sends unsigned without Mail::DKIM, so a site that does
+					# not sign does not have to install it.
+					'Mail::DKIM' => 0,
+					# On Windows Filesys::Df is not required, because it cannot be
+					# installed there - so say what it is for instead (see PREREQ_PM).
+					(($^O eq 'MSWin32') ? ('Filesys::Df' => 0) : ()),
+				},
+			},
+		},
 		resources => {
 			repository => {
 				type => 'git',

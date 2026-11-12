@@ -10,6 +10,7 @@ use warnings;
 use Carp;
 use Web::VWF::Display;
 use Web::VWF::Utils qw(create_disc_cache);
+use Web::VWF::Mail;
 use String::Random;
 
 our @ISA = ('Web::VWF::Display');
@@ -55,7 +56,12 @@ sub html {
 	my $index = $args{'index'};
 	croak("Missing 'index' handle") unless($index);
 
-	if(scalar(keys %{$params}) == 0) {
+	# B::Lint reads `keys %{$params}` in scalar context as an implicit scalar
+	# context for a hash - a false positive, since the dereference is exactly
+	# what is meant - but CI runs B::Lint over every module and treats a finding
+	# as a failure, so the list is taken into an array before it is counted.
+	my @remaining = keys %{$params};
+	if(!@remaining) {
 		# No parameters to process: display the main index page
 		return $self->SUPER::html(updated => $index->updated());
 	}
@@ -119,15 +125,22 @@ sub html {
                 $self->{'mailfrom'}->{$remote_addr}++;
         }
 
-	# Send the email
-	if(open(my $fout, '|-', '/usr/sbin/sendmail -t')) {
-		print $fout "To: $to\n",
-			"From: webmaster\n",
-			"Subject: VWF sending an e-mail\n\n",
-			"Hello, world\n";
+	# Send the email.  The sender is in the site's own domain because that is
+	# the domain the configured key signs for: a From anywhere else would fail
+	# DMARC alignment at the receiver even though the signature itself verified.
+	my $from_email = 'webmaster@' . $info->domain_name();
+	my $mailer = Web::VWF::Mail->new(
+		from => $from_email,
+		domain => $info->domain_name(),
+		selector => $self->{_config}->{'DKIMSelector'},
+		keyfile => $self->{_config}->{'DKIMKey'},
+	);
+	$mailer->print("To: $to\n",
+		"From: $from_email\n",
+		"Subject: VWF sending an e-mail\n\n",
+		"Hello, world\n");
 
-		close $fout;
-
+	if($mailer->close()) {
 		if($self->{_logger}) {
 			$self->{_logger}->trace("E-mail sent to $to");
 		}
@@ -135,7 +148,7 @@ sub html {
 		# Render the response that the email has been sent
 		return $self->SUPER::html({ action => 'sent', updated => $index->updated() });
 	}
-	return $self->SUPER::html({ error => "Can't find /usr/sbin/sendmail", updated => $index->updated() });
+	return $self->SUPER::html({ error => "Can't send e-mail", updated => $index->updated() });
 }
 
 1;

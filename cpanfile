@@ -60,6 +60,7 @@ requires 'Timer::Simple';
 requires 'Try::Tiny';
 requires 'version', '0.77';
 recommends 'Filesys::Df';
+recommends 'Mail::DKIM';   # Signed mail from Web::VWF::Mail
 
 on 'configure' => sub {
 	requires 'ExtUtils::MakeMaker', '6.64';   # Minimum version for TEST_REQUIRES

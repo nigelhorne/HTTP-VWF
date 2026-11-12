@@ -84,19 +84,21 @@ sub html {
 	my $status_chart = @status
 		? _scoped_snippet($charts->render_pie_chart_snippet({ data => \@status, id => 'status_chart', donut => 1, sort_slices => 'label' }))
 		: $NO_REQUESTS;
-	my $rate_chart = @{$rate_24h->{'total'}}
+	# B::Lint reads an array dereference in a conditional as an implicit scalar
+	# context and fails CI over it; scalar() is the count that was wanted anyway.
+	my $rate_chart = scalar(@{$rate_24h->{'total'}})
 		? _scoped_snippet($charts->render_multi_series_line_chart_snippet({
 			series_data => _series(['Requests', $rate_24h->{'total'}], ['Errors', $rate_24h->{'errors'}]),
 			id => 'rate_chart', x_label => 'Hour', y_label => 'Requests',
 		}))
 		: $NO_RECENT_REQUESTS;
-	my $latency_chart = @{$latency_24h->{'avg'}}
+	my $latency_chart = scalar(@{$latency_24h->{'avg'}})
 		? _scoped_snippet($charts->render_multi_series_line_chart_snippet({
 			series_data => _series(['Average', $latency_24h->{'avg'}], ['P95', $latency_24h->{'p95'}]),
 			id => 'latency_chart', x_label => 'Hour', y_label => 'Milliseconds',
 		}))
 		: $NO_DURATIONS;
-	my $slow_chart = @{$slow}
+	my $slow_chart = scalar(@{$slow})
 		? _scoped_snippet($charts->render_bar_chart_snippet({
 			data => $slow, id => 'slow_chart', orientation => 'horizontal',
 			sort_bars => 'value', show_values => 1, value_label => 'ms',
