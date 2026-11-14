@@ -1,5 +1,9 @@
 Revision history for Web-VWF
 
+0.002.1
+	[ Bug Fixes ]
+	- Handle captcha display failure
+
 0.002.0	Wed Nov 11 08:54:17 PM EST 2026
 	Added Web::VWF::Mail: sends mail through sendmail(1), signed with DKIM when
 	the site configures DKIMSelector and DKIMKey.  Mail::DKIM is recommended,

@@ -811,14 +811,24 @@ sub _doit
 					config => $config,
 				});
 
-				print $display->as_string({
-					'Retry-After' => $retry_after,
-					Retry_After => $retry_after,
-					hard_block => 0,
-					request_count => $request_count,
-				});
+				if($display) {
+					print $display->as_string({
+						'Retry-After' => $retry_after,
+						Retry_After => $retry_after,
+						hard_block => 0,
+						request_count => $request_count,
+					});
 
-				$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Soft rate limit - CAPTCHA shown', $log, $request_start);
+					$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Soft rate limit - CAPTCHA shown', $log, $request_start);
+				} else {
+					my $error = $@;
+					if($error) {
+						$logger->error($error);
+					} else {
+                                                $logger->error("Unable to show captcha page - request count = $request_count");
+					}
+					$self->_vwflog($vwflog, $info, $lingua, $syslog, 'Soft rate limit - CAPTCHA not shown', $log, $request_start);
+				}
 				return;
 			}
 		}
